@@ -26,18 +26,18 @@ export default function App() {
         }
       >
         <Route index element={<Navigate to="/dashboard" replace />} />
-        <Route path="dashboard" element={<DashboardPage />} />
-        <Route path="crm" element={<CrmPage />} />
+        <Route path="dashboard"   element={<DashboardPage />} />
+        <Route path="crm"         element={<CrmPage />} />
         <Route path="sales-radar" element={<SalesRadarPage />} />
-        <Route path="activities" element={<ActivitiesPage />} />
-        <Route path="offers" element={<div className="p-6 text-slate-400">Teklifler yakında...</div>} />
-        <Route path="orders" element={<div className="p-6 text-slate-400">Siparişler yakında...</div>} />
-        <Route path="products" element={<div className="p-6 text-slate-400">Ürünler yakında...</div>} />
-        <Route path="reports" element={<div className="p-6 text-slate-400">Raporlar yakında...</div>} />
-        <Route path="calendar" element={<div className="p-6 text-slate-400">Takvim yakında...</div>} />
-        <Route path="messages" element={<div className="p-6 text-slate-400">Mesajlar yakında...</div>} />
-        <Route path="settings" element={<div className="p-6 text-slate-400">Ayarlar yakında...</div>} />
-        <Route path="admin" element={<div className="p-6 text-slate-400">Yönetim yakında...</div>} />
+        <Route path="activities"  element={<ActivitiesPage />} />
+        <Route path="teklifler"   element={<div className="p-6 text-slate-400">Teklif Merkezi yakında...</div>} />
+        <Route path="konfigurator"element={<div className="p-6 text-slate-400">Konfiguratör yakında...</div>} />
+        <Route path="dosyalar"    element={<div className="p-6 text-slate-400">Dosya Merkezi yakında...</div>} />
+        <Route path="performans"  element={<div className="p-6 text-slate-400">Performans & Prim yakında...</div>} />
+        <Route path="bildirimler" element={<div className="p-6 text-slate-400">Canlı Bildirimler yakında...</div>} />
+        <Route path="maliyet"     element={<div className="p-6 text-slate-400">Maliyet Merkezi yakında...</div>} />
+        <Route path="yonetim"     element={<div className="p-6 text-slate-400">Yönetim Paneli yakında...</div>} />
+        <Route path="ustabot"     element={<div className="p-6 text-slate-400">UstaBot yakında...</div>} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

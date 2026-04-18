@@ -7,7 +7,7 @@ export default function DashboardPage() {
 
   return (
     <div className="p-6">
-      <h1 className="text-2xl font-bold text-slate-100 mb-1">{t('nav.dashboard')}</h1>
+      <h1 className="text-2xl font-bold text-slate-100 mb-1">{t('nav.komutaMerkezi')}</h1>
       <p className="text-slate-400 mb-8">Hoş geldiniz, {user?.full_name}</p>
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
         {[
