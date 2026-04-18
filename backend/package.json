@@ -1,0 +1,26 @@
+{
+  "name": "gd360-backend",
+  "version": "0.1.0",
+  "description": "GDSales360.ai Backend API",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "migrate": "node src/db/migrate.js",
+    "seed": "node seeds/index.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "express": "^5.1.0",
+    "helmet": "^8.0.0",
+    "ioredis": "^5.3.2",
+    "jsonwebtoken": "^9.0.2",
+    "pg": "^8.13.1",
+    "uuid": "^11.0.5"
+  },
+  "devDependencies": {
+    "dotenv": "^16.4.7"
+  }
+}
