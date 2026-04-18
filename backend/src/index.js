@@ -5,6 +5,7 @@ import cors from 'cors';
 import redis from './redis/client.js';
 import healthRouter from './routes/health.js';
 import authRouter from './routes/auth.js';
+import customersRouter from './routes/customers.js';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -18,6 +19,7 @@ app.use(express.json());
 
 app.use('/api/health', healthRouter);
 app.use('/api/v1/auth', authRouter);
+app.use('/api/v1/customers', customersRouter);
 
 app.use((err, req, res, next) => {
   console.error(err);
