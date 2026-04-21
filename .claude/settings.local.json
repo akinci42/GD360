@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git config *)",
+      "Read(//c/Users/ACOBAN/.claude/projects/C--Projects-GD360/**)",
+      "Read(//c/Users/ACOBAN/.claude/projects/C--Projects-GD360/memory/**)",
+      "Bash(docker compose up *)",
+      "Bash(docker info *)",
+      "Bash(docker compose ps *)",
+      "Bash(wsl *)",
+      "Bash(net stop *)",
+      "Bash(net start *)",
+      "Bash(docker compose exec *)",
+      "Bash(curl -s http://localhost:3001/api/health)",
+      "Bash(python -m json.tool)",
+      "Bash(docker compose restart *)",
+      "Bash(docker compose logs *)",
+      "Bash(git push *)",
+      "Bash(docker compose down *)",
+      "Bash(git commit *)",
+      "Bash(xargs ls *)",
+      "Bash"
+    ]
+  }
+}
