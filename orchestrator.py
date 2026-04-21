@@ -85,11 +85,20 @@ def git_changed_files():
         ['git', 'status', '--short'],
         cwd=PROJECT_DIR, capture_output=True, text=True, encoding='utf-8'
     )
+    EXCLUDE = ['.gd360-agent', 'orchestrator.py']
     lines = []
-    for line in r.stdout.strip().splitlines():
-        path = line[3:].strip().strip('"')
-        if '.gd360-agent' not in path and 'orchestrator.py' not in path:
-            lines.append(line.strip())
+    for raw in r.stdout.strip().splitlines():
+        # git status --short: "XY filename" — XY = 1-2 status chars, then space(s), then path
+        # Robust parse: split on whitespace and take last part as path
+        stripped = raw.strip()
+        if not stripped:
+            continue
+        parts = stripped.split()
+        # path may be last token; handle renamed "old -> new" format too
+        path = parts[-1].strip('"').replace('\\', '/')
+        if any(ex in path for ex in EXCLUDE):
+            continue
+        lines.append(stripped)
     return lines
 
 def git_has_changes():
@@ -133,7 +142,8 @@ def run_claude(prompt, task_id, attempt):
     --print ile calistirildiginda sadece metin ciktisi verir, dosya yazmaz.
     """
     log_file = LOGS_DIR / f"{task_id}_a{attempt}_{datetime.now().strftime('%H%M%S')}.log"
-    log(f"  [{ts()}] Claude calistirilıyor (deneme {attempt}/3, --print YOK)...", C)
+    log(f"  [{ts()}] Claude calistirilıyor (deneme {attempt}/3)...", C)
+    log(f"  Komut: {CLAUDE} --dangerously-skip-permissions -p <prompt>  [--print YOK]", C)
     log(f"  Log: {log_file.name}", C)
 
     try:
@@ -444,8 +454,12 @@ def main():
     print(f"{C}  Mod: {'--print YOK (arac kullanimi aktif)'}{E}\n")
 
     if test_mode:
-        # Test modunda sadece test gorevini calistir
+        # ONEMLI: Bu script aktif bir Claude Code oturumu DISINDA calistirilmali.
+        # Iceride (Bash tool ile) calistirildiginda subprocess claude, mevcut oturumu devralir
+        # ve gorev yerine ozet yazdirabilir. Dogru kullanim:
+        #   Yeni PowerShell/cmd terminali ac → cd C:\Projects\GD360 → python orchestrator.py --test
         log(f"{Y}[TEST MODU] Orchestrator dogrulama basliyor...{E}", Y)
+        log(f"{Y}NOT: Bu test Claude Code DISINDA (bagimsiz terminal) calistirildiginda dogru sonuc verir.{E}", Y)
         check_docker()
 
         # Onceki test dosyasini temizle
