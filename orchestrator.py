@@ -1,44 +1,54 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-GD360 Module Orchestrator v2
---print KALDIRILDI: claude -p <prompt> gercekten araclari kullanir ve dosya yazar.
-Kullanim:
-  python orchestrator.py              -- kalan tum gorevleri calistir
-  python orchestrator.py --from ID   -- belirli gorevden basla (oncekini sifirla)
-  python orchestrator.py --test      -- basit test gorevi ile dogrula
-  python orchestrator.py --status    -- sadece durum goster, calistirma
+GD360 Module Orchestrator v3 — Anthropic Python SDK
+claude CLI subprocess YOK. Doğrudan API + tool loop.
+
+Kullanım:
+  python orchestrator.py              -- kalan görevleri sırayla çalıştır
+  python orchestrator.py --from ID    -- belirli görevden başla (öncekileri sıfırla)
+  python orchestrator.py --test       -- basit test görevi
+  python orchestrator.py --status     -- sadece durum göster
+  python orchestrator.py --set-key K  -- ANTHROPIC_API_KEY kaydet (backend/.env)
 """
 
 import json
 import os
-import shutil
+import re
 import subprocess
 import sys
 import time
 from datetime import datetime
 from pathlib import Path
 
-# Windows konsolunda UTF-8 cikti icin
+# Windows UTF-8 fix
 if sys.platform == 'win32':
     import io
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
-# ── ANSI Renkler ──────────────────────────────────────────────────────────────
-G = '\033[92m'
-R = '\033[91m'
-Y = '\033[93m'
-B = '\033[94m'
-C = '\033[96m'
-W = '\033[1m'
-E = '\033[0m'
+try:
+    from anthropic import Anthropic
+except ImportError:
+    print("anthropic paketi bulunamadi. Kurmak için:")
+    print("  pip install anthropic")
+    sys.exit(1)
+
+# ── ANSI renkler ──────────────────────────────────────────────────────────────
+G = '\033[92m'; R = '\033[91m'; Y = '\033[93m'
+B = '\033[94m'; C = '\033[96m'; W = '\033[1m';  E = '\033[0m'
 
 # ── Yollar ────────────────────────────────────────────────────────────────────
 PROJECT_DIR = Path(__file__).parent.resolve()
 AGENT_DIR   = PROJECT_DIR / '.gd360-agent'
 CKPT_FILE   = AGENT_DIR  / 'checkpoint.json'
 LOGS_DIR    = AGENT_DIR  / 'logs'
+ENV_FILE    = PROJECT_DIR / 'backend' / '.env'
+
+# ── Model ─────────────────────────────────────────────────────────────────────
+MODEL      = 'claude-opus-4-5-20250514'   # En iyi kodlama kalitesi için
+MAX_TOKENS = 8192
+MAX_ITERS  = 60   # Tek görev başına maksimum tool-loop iterasyonu
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 def log(msg, color=E):
@@ -64,137 +74,259 @@ def load_ckpt():
 def save_ckpt(ckpt):
     CKPT_FILE.write_text(json.dumps(ckpt, indent=2, ensure_ascii=False), encoding='utf-8')
 
-def find_claude():
-    candidates = [
-        shutil.which('claude'),
-        str(Path.home() / 'AppData/Local/AnthropicClaude/claude.exe'),
-        str(Path.home() / '.local/bin/claude'),
-        '/usr/local/bin/claude',
-    ]
-    for c in candidates:
-        if c and Path(c).exists():
-            return c
-    return 'claude'
+# ── API Key ───────────────────────────────────────────────────────────────────
+def get_api_key():
+    # 1. Ortam değişkeni
+    key = os.environ.get('ANTHROPIC_API_KEY', '')
+    if key.startswith('sk-ant'):
+        return key
+    # 2. backend/.env dosyası
+    if ENV_FILE.exists():
+        for line in ENV_FILE.read_text(encoding='utf-8').splitlines():
+            line = line.strip()
+            if line.startswith('ANTHROPIC_API_KEY=') and not line.startswith('#'):
+                val = line.split('=', 1)[1].strip().strip('"\'')
+                if val.startswith('sk-ant'):
+                    return val
+    return ''
 
-CLAUDE = find_claude()
+def save_api_key(key):
+    content = ENV_FILE.read_text(encoding='utf-8') if ENV_FILE.exists() else ''
+    if 'ANTHROPIC_API_KEY=' in content:
+        lines = []
+        for line in content.splitlines():
+            if line.startswith('ANTHROPIC_API_KEY=') or line.startswith('# ANTHROPIC_API_KEY='):
+                lines.append(f'ANTHROPIC_API_KEY={key}')
+            else:
+                lines.append(line)
+        ENV_FILE.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+    else:
+        with open(ENV_FILE, 'a', encoding='utf-8') as f:
+            f.write(f'\nANTHROPIC_API_KEY={key}\n')
+    log(f"  [+] API anahtarı backend/.env dosyasına kaydedildi", G)
 
-# ── Git helpers ───────────────────────────────────────────────────────────────
+# ── Path resolution ────────────────────────────────────────────────────────────
+def resolve_path(path_str):
+    """Relative veya absolute path'i PROJECT_DIR içinde güvenli şekilde çözer."""
+    p = path_str.replace('\\', '/').strip()
+    # Absolute path → projeye göre relativize et
+    for prefix in [
+        'C:/Projects/GD360/', '/Projects/GD360/',
+        str(PROJECT_DIR).replace('\\', '/') + '/',
+    ]:
+        if p.startswith(prefix):
+            p = p[len(prefix):]
+            break
+    # Başında / varsa kaldır
+    p = p.lstrip('/')
+    resolved = (PROJECT_DIR / p).resolve()
+    # Güvenlik: proje dışına çıkma
+    try:
+        resolved.relative_to(PROJECT_DIR)
+    except ValueError:
+        raise ValueError(f"Güvenlik hatası: proje dışı yol: {path_str}")
+    return resolved
+
+# ── Tool tanımları ─────────────────────────────────────────────────────────────
+TOOLS = [
+    {
+        "name": "create_file",
+        "description": (
+            "Yeni bir dosya oluşturur veya varsa üzerine yazar. "
+            "Gerekli parent dizinleri otomatik oluşturur. "
+            "Path, proje kökünden relative veya C:\\Projects\\GD360\\ ile başlayan absolute olabilir."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path":    {"type": "string", "description": "Dosya yolu (relative veya absolute)"},
+                "content": {"type": "string", "description": "Dosya içeriği"},
+            },
+            "required": ["path", "content"],
+        },
+    },
+    {
+        "name": "edit_file",
+        "description": (
+            "Mevcut bir dosyada old_text'i new_text ile değiştirir (ilk eşleşme). "
+            "old_text tam eşleşme gerektirir — boşluk ve satır sonları dahil. "
+            "Değişiklik yoksa hata döner."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path":     {"type": "string"},
+                "old_text": {"type": "string", "description": "Değiştirilecek metin (tam eşleşme)"},
+                "new_text": {"type": "string", "description": "Yerine yazılacak metin"},
+            },
+            "required": ["path", "old_text", "new_text"],
+        },
+    },
+    {
+        "name": "read_file",
+        "description": "Dosya içeriğini okur ve döner. Büyük dosyalar için offset/limit parametreleri kullan.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path":   {"type": "string"},
+                "offset": {"type": "integer", "description": "Başlangıç satır numarası (0-indexed, opsiyonel)"},
+                "limit":  {"type": "integer", "description": "Okunacak max satır sayısı (opsiyonel)"},
+            },
+            "required": ["path"],
+        },
+    },
+    {
+        "name": "run_command",
+        "description": (
+            "Shell komutu çalıştırır (cwd=C:\\Projects\\GD360). "
+            "Komut çıktısı (stdout+stderr) döner, max 6000 karakter. "
+            "Örnekler: 'ls backend/src/routes/', "
+            "'docker-compose exec -T backend npm run migrate', "
+            "'git status --short'"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "command": {"type": "string", "description": "Çalıştırılacak komut"},
+                "timeout": {"type": "integer", "description": "Saniye cinsinden timeout (default: 120)"},
+            },
+            "required": ["command"],
+        },
+    },
+]
+
+# ── Tool executor ──────────────────────────────────────────────────────────────
+def execute_tool(name, inp, log_file):
+    """Tool'u çalıştırır, sonucu döner ve log dosyasına yazar."""
+    try:
+        if name == "create_file":
+            path = resolve_path(inp["path"])
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(inp["content"], encoding='utf-8', errors='replace')
+            result = f"OK: Dosya oluşturuldu → {path.relative_to(PROJECT_DIR)}"
+
+        elif name == "edit_file":
+            path = resolve_path(inp["path"])
+            if not path.exists():
+                result = f"HATA: Dosya bulunamadı: {path.relative_to(PROJECT_DIR)}"
+            else:
+                content = path.read_text(encoding='utf-8', errors='replace')
+                old = inp["old_text"]
+                if old not in content:
+                    # Daha yararlı hata: ilk 80 karakter göster
+                    snippet = repr(old[:80])
+                    result = (
+                        f"HATA: old_text dosyada bulunamadı.\n"
+                        f"Aranan (ilk 80 kr): {snippet}\n"
+                        f"Dosyanın mevcut içeriğini read_file ile okuyun ve tam metni kullanın."
+                    )
+                else:
+                    new_content = content.replace(old, inp["new_text"], 1)
+                    path.write_text(new_content, encoding='utf-8', errors='replace')
+                    result = f"OK: Düzenlendi → {path.relative_to(PROJECT_DIR)}"
+
+        elif name == "read_file":
+            path = resolve_path(inp["path"])
+            if not path.exists():
+                result = f"HATA: Dosya bulunamadı: {inp['path']}"
+            else:
+                lines = path.read_text(encoding='utf-8', errors='replace').splitlines()
+                offset = int(inp.get("offset", 0))
+                limit  = int(inp.get("limit", 500))
+                chunk  = lines[offset:offset + limit]
+                header = f"[{path.relative_to(PROJECT_DIR)}  satır {offset+1}-{offset+len(chunk)}/{len(lines)}]\n"
+                result = header + '\n'.join(f"{offset+i+1:4d}  {l}" for i, l in enumerate(chunk))
+
+        elif name == "run_command":
+            timeout = int(inp.get("timeout", 120))
+            r = subprocess.run(
+                inp["command"], shell=True, cwd=PROJECT_DIR,
+                capture_output=True, text=True, encoding='utf-8',
+                errors='replace', timeout=timeout
+            )
+            out = (r.stdout or '') + (r.stderr or '')
+            out = out.strip()
+            if not out:
+                out = "(çıktı yok)"
+            if len(out) > 6000:
+                out = out[:2000] + "\n...[KISALTILDI]...\n" + out[-2000:]
+            rc = f"\n[exit code: {r.returncode}]"
+            result = out + rc
+        else:
+            result = f"HATA: Bilinmeyen tool: {name}"
+
+    except subprocess.TimeoutExpired:
+        result = f"HATA: Komut zaman aşımına uğradı"
+    except Exception as e:
+        result = f"HATA: {type(e).__name__}: {e}"
+
+    # Log'a yaz
+    with open(log_file, 'a', encoding='utf-8', errors='replace') as f:
+        f.write(f"\n[TOOL: {name}]\n")
+        f.write(f"INPUT: {json.dumps(inp, ensure_ascii=False)[:300]}\n")
+        f.write(f"RESULT: {result[:500]}\n")
+        f.write("-" * 40 + "\n")
+
+    return result
+
+# ── Git helpers ────────────────────────────────────────────────────────────────
 def git_changed_files():
-    """Returns list of changed/new files (excludes .gd360-agent and orchestrator.py)."""
-    r = subprocess.run(
-        ['git', 'status', '--short'],
-        cwd=PROJECT_DIR, capture_output=True, text=True, encoding='utf-8'
-    )
-    EXCLUDE = ['.gd360-agent', 'orchestrator.py']
-    lines = []
+    r = subprocess.run(['git', 'status', '--short'],
+                       cwd=PROJECT_DIR, capture_output=True,
+                       text=True, encoding='utf-8')
+    EXCLUDE = ['.gd360-agent', 'orchestrator.py', '__pycache__']
+    result = []
     for raw in r.stdout.strip().splitlines():
-        # git status --short: "XY filename" — XY = 1-2 status chars, then space(s), then path
-        # Robust parse: split on whitespace and take last part as path
         stripped = raw.strip()
         if not stripped:
             continue
         parts = stripped.split()
-        # path may be last token; handle renamed "old -> new" format too
         path = parts[-1].strip('"').replace('\\', '/')
         if any(ex in path for ex in EXCLUDE):
             continue
-        lines.append(stripped)
-    return lines
-
-def git_has_changes():
-    return len(git_changed_files()) > 0
+        result.append(stripped)
+    return result
 
 def git_commit(msg):
     subprocess.run(['git', 'add', '-A'], cwd=PROJECT_DIR)
-    full_msg = f"{msg}\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
-    r = subprocess.run(
-        ['git', 'commit', '-m', full_msg],
-        cwd=PROJECT_DIR, capture_output=True, text=True, encoding='utf-8'
-    )
+    full = f"{msg}\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
+    r = subprocess.run(['git', 'commit', '-m', full],
+                       cwd=PROJECT_DIR, capture_output=True,
+                       text=True, encoding='utf-8')
     if r.returncode == 0:
-        log(f"  [+] Git commit OK", G)
-        return True
+        log(f"  [+] git commit OK", G); return True
     combined = (r.stdout + r.stderr).lower()
     if 'nothing to commit' in combined or 'no changes' in combined:
-        log(f"  ~ Commit edilecek degisiklik yok (dosyalar zaten mevcut)", Y)
-        return True
-    log(f"  [!] Git commit hatasi: {r.stderr.strip()[-200:]}", R)
+        log(f"  ~ commit edilecek değişiklik yok", Y); return True
+    log(f"  [!] git commit hatası: {r.stderr.strip()[-200:]}", R)
     return False
 
-# ── Migration ─────────────────────────────────────────────────────────────────
 def run_migration():
-    log(f"  [{ts()}] Migration calistiriliyor...", Y)
+    log(f"  [{ts()}] Migration çalıştırılıyor...", Y)
     r = subprocess.run(
         ['docker-compose', 'exec', '-T', 'backend', 'npm', 'run', 'migrate'],
-        cwd=PROJECT_DIR, capture_output=True, text=True, encoding='utf-8', timeout=120
+        cwd=PROJECT_DIR, capture_output=True,
+        text=True, encoding='utf-8', timeout=120
     )
     if r.returncode != 0:
-        log(f"  [!] Migration hatasi: {r.stderr.strip()[-300:]}", R)
+        log(f"  [!] Migration hatası: {r.stderr.strip()[-300:]}", R)
         return False
-    log(f"  [+] Migration basarili", G)
+    log(f"  [+] Migration başarılı", G)
     return True
 
-# ── Claude runner ──────────────────────────────────────────────────────────────
-def run_claude(prompt, task_id, attempt):
-    """
-    --print OLMADAN calistir: claude -p <prompt>
-    Bu modda Claude arac kullanir (Write/Edit/Bash) ve gercekten dosya yazar.
-    --print ile calistirildiginda sadece metin ciktisi verir, dosya yazmaz.
-    """
-    log_file = LOGS_DIR / f"{task_id}_a{attempt}_{datetime.now().strftime('%H%M%S')}.log"
-    log(f"  [{ts()}] Claude calistirilıyor (deneme {attempt}/3)...", C)
-    log(f"  Komut: {CLAUDE} --dangerously-skip-permissions -p <prompt>  [--print YOK]", C)
-    log(f"  Log: {log_file.name}", C)
-
-    try:
-        # KRITIK: --print FLAG'I YOK
-        # -p ile prompt gecilir, araclari kullanarak gercekten dosya yazar
-        # stdin=DEVNULL: TTY beklemesin, hemen calissın
-        with open(log_file, 'w', encoding='utf-8', errors='replace') as lf:
-            result = subprocess.run(
-                [CLAUDE, '--dangerously-skip-permissions', '-p', prompt],
-                cwd=PROJECT_DIR,
-                stdout=lf,
-                stderr=lf,
-                stdin=subprocess.DEVNULL,
-                timeout=900
-            )
-    except subprocess.TimeoutExpired:
-        log(f"  [!] Zaman asimi (900s)", R)
-        return False, "TIMEOUT"
-    except FileNotFoundError:
-        log(f"  [!] Claude bulunamadi: {CLAUDE}", R)
-        return False, "NOT_FOUND"
-
-    output = ""
-    if log_file.exists():
-        output = log_file.read_text(encoding='utf-8', errors='replace')
-
-    ok = result.returncode == 0
-
-    if not ok:
-        tail = output.strip()[-800:]
-        log(f"  [!] Hata kodu: {result.returncode}", R)
-        if tail:
-            log(f"  Son cikti:\n{tail}", R)
-
-    return ok, output
-
-# ── Docker check ──────────────────────────────────────────────────────────────
 def check_docker():
-    r = subprocess.run(
-        ['docker-compose', 'ps', 'backend'],
-        cwd=PROJECT_DIR, capture_output=True, text=True, timeout=15
-    )
+    r = subprocess.run(['docker-compose', 'ps', 'backend'],
+                       cwd=PROJECT_DIR, capture_output=True,
+                       text=True, timeout=15)
     if r.returncode != 0 or 'Up' not in r.stdout:
-        log("  [!] Backend container calısmiyor -- 'docker-compose up -d' onerilir", Y)
+        log("  [!] Backend container çalışmıyor — docker-compose up -d önerilir", Y)
 
-# ── Status printer ────────────────────────────────────────────────────────────
 def print_status(tasks, ckpt):
     done = set(ckpt.get('completed', []))
-    print(f"\n{W}{'='*54}{E}")
-    print(f"{W}  GD360 Orchestrator v2 -- Modul Durumu{E}")
-    print(f"{W}{'='*54}{E}")
+    print(f"\n{W}{'='*56}{E}")
+    print(f"{W}  GD360 Orchestrator v3 (SDK)  |  {datetime.now():%Y-%m-%d %H:%M}{E}")
+    print(f"{W}  Model: {MODEL}{E}")
+    print(f"{W}{'='*56}{E}")
     for t in tasks:
         icon = f"{G}[OK]{E}" if t['id'] in done else f"{Y}[ ]{E}"
         at = ckpt.get(f"{t['id']}_completed_at", '')
@@ -202,20 +334,21 @@ def print_status(tasks, ckpt):
         print(f"  {icon}  {t['name']}{when}")
     rem = sum(1 for t in tasks if t['id'] not in done)
     print(f"\n  Toplam: {len(tasks)}  Tamamlanan: {len(done)}  Kalan: {rem}")
-    print(f"{W}{'='*54}{E}\n")
+    print(f"{W}{'='*56}{E}\n")
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# PROJE BAGLAMLARI
+# SYSTEM PROMPT
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-CTX = r"""Sen GD360 proje gelistiricisisin. Su an C:\Projects\GD360 dizininde calisiyorsun.
+SYSTEM = """Sen GD360 projesinin geliştiricisisin. C:\\Projects\\GD360 dizininde çalışıyorsun.
+Verilen görevi adım adım tamamla.
 
 STACK:
-- Backend: Node.js 20, Express 5 (ESM syntax: import/export), PostgreSQL 16 + RLS, Redis 7
-- Frontend: React 18, Vite, Tailwind CSS v3 (dark tema)
-- Docker Compose ile calistirilıyor
+- Backend: Node.js 20 + Express 5 (ESM: import/export), PostgreSQL 16 + RLS, Redis 7
+- Frontend: React 18 + Vite + Tailwind CSS v3 dark tema
+- Docker Compose ortamı
 
-KRITIK BACKEND PATTERN:
+KRITIK BACKEND PATTERN (her route dosyası bu şablonu takip eder):
   import { Router } from 'express';
   import { authenticate } from '../middleware/auth.js';
   import { getRlsClient } from '../db/rls.js';
@@ -234,191 +367,152 @@ KRITIK FRONTEND PATTERN:
   import { useState, useEffect } from 'react';
   import { useTranslation } from 'react-i18next';
   import { useAuthStore } from '../store/authStore.js';
-  import api from '../utils/api.js';  // axios, Bearer token otomatiK
+  import api from '../utils/api.js';
 
-TAILWIND DARK TEMA: bg-dark-900, bg-dark-800, bg-dark-700, border-dark-700,
-  text-slate-100/200/400/500, brand-600 (accent)
-CSS UTILITIES (index.css'de): .card, .input, .form-label, .btn-primary, .btn-secondary
+TAILWIND: bg-dark-900/800/700, border-dark-700, text-slate-100/200/400/500, brand-600
+CSS utils: .card, .input, .form-label, .btn-primary, .btn-secondary
 
-RLS SQL PATTERN:
+RLS SQL:
   current_setting('app.user_role', TRUE) IN ('owner','coordinator')
-  current_setting('app.user_id', TRUE)  -- UUID olarak karsilastir
+  current_setting('app.user_id', TRUE)
 
-MEVCUT MIGRASYONLAR: 001-011 (tamamlandi)
-MEVCUT ROUTES: auth, customers, opportunities, followups, admin, dashboard,
-               offers, products, configurations, files, reports, notifications, costs, ustabot
+ARAÇLAR:
+- Dosya okumak için read_file kullan (Edit'ten önce mutlaka oku)
+- Yeni dosya için create_file
+- Mevcut dosyayı düzeltmek için edit_file (old_text tam eşleşme!)
+- Komut çalıştırmak için run_command (ls, git, docker-compose, npm)
 
-DOSYA DEGISTIRIRKEN:
-  1. Once Read tool ile dosyayi OKU
-  2. Sonra Edit veya Write ile degistir
-  3. Yeni dosya icin Write, mevcut dosyada kucuk degisiklik icin Edit kullan
-"""
+İŞ BİTİNCE: "GÖREV TAMAMLANDI" yaz ve dur. Başka şey yapma."""
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# TEST GOREVI
+# TOOL LOOP
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-TEST_TASK = {
-    "id": "orchestrator_test",
-    "name": "Orchestrator Dogrulama Testi",
-    "has_migration": False,
-    "commit_msg": "test: orchestrator arac kullanimi dogrulama",
-    "prompt": CTX + """
-GOREV: Basit bir test gorevi. Asagidaki adımlari sırayla yap:
+def run_with_sdk(task_id, prompt, api_key):
+    """API + tool loop. Başarı durumu döner."""
+    log_file = LOGS_DIR / f"{task_id}_{datetime.now().strftime('%H%M%S')}.log"
+    log(f"  [{ts()}] SDK tool loop başlıyor... log → {log_file.name}", C)
 
-ADIM 1 — Bash tool ile rota dosyalarini listele:
-  ls backend/src/routes/
+    client   = Anthropic(api_key=api_key)
+    messages = [{"role": "user", "content": prompt}]
 
-ADIM 2 — Bash tool ile migration dosyalarini listele:
-  ls backend/migrations/
+    # Log başlığı
+    with open(log_file, 'w', encoding='utf-8', errors='replace') as f:
+        f.write(f"TASK: {task_id}\nMODEL: {MODEL}\nTIME: {datetime.now().isoformat()}\n")
+        f.write("=" * 60 + "\n")
 
-ADIM 3 — Write tool ile backend/TEST_ORCHESTRATOR.md dosyasini olustur.
-  Icerik tam olarak su olsun (adim 1 ve 2 ciktilarini ekle):
+    for iteration in range(1, MAX_ITERS + 1):
+        try:
+            response = client.messages.create(
+                model=MODEL,
+                max_tokens=MAX_TOKENS,
+                system=SYSTEM,
+                tools=TOOLS,
+                messages=messages,
+            )
+        except Exception as e:
+            log(f"  [!] API hatası: {e}", R)
+            with open(log_file, 'a', encoding='utf-8') as f:
+                f.write(f"API HATASI: {e}\n")
+            return False
 
-  # Orchestrator Test - BASARILI
+        # Assistant yanıtını mesaj geçmişine ekle
+        messages.append({"role": "assistant", "content": response.content})
 
-  Tarih: """ + datetime.now().strftime('%Y-%m-%d %H:%M') + """
+        # Metin blokları logla
+        for block in response.content:
+            if hasattr(block, 'text') and block.text:
+                snippet = block.text.strip()[:200]
+                log(f"  [Claude] {snippet}", C if 'TAMAMLANDI' not in snippet else G)
+                with open(log_file, 'a', encoding='utf-8', errors='replace') as f:
+                    f.write(f"\n[iter {iteration}] ASSISTANT TEXT:\n{block.text}\n")
 
-  Bu dosya orchestrator'un --print OLMADAN dogru calistigini kanitlar.
-  Claude bu dosyayi Write araciyla olusturdu.
+        if response.stop_reason == 'end_turn':
+            log(f"  [+] Claude görevi bitirdi ({iteration} iterasyon)", G)
+            return True
 
-  ## backend/src/routes/ icindeki dosyalar
-  [adim 1 ciktisini buraya yaz]
+        if response.stop_reason != 'tool_use':
+            log(f"  [!] Beklenmeyen stop_reason: {response.stop_reason}", R)
+            return False
 
-  ## backend/migrations/ icindeki dosyalar
-  [adim 2 ciktisini buraya yaz]
+        # Tool çağrılarını işle
+        tool_results = []
+        for block in response.content:
+            if block.type != 'tool_use':
+                continue
 
-  ## Sonuc
-  Orchestrator v2: CALISIYOR
-  Claude arac kullandi ve bu dosyayi yazdi.
+            tname = block.name
+            tinput = block.input
 
-ADIM 4 — Basarili oldugunu dogrula: Read tool ile backend/TEST_ORCHESTRATOR.md dosyasini oku.
-"""
-}
+            # Kullanıcıya göster
+            summary = ', '.join(
+                f"{k}={repr(str(v)[:60])}" for k, v in tinput.items()
+            )
+            log(f"  [{iteration:2d}] {tname}({summary})", B)
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# ANA GOREVLER (gelecekteki moduller icin)
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-TASKS = [
+            result = execute_tool(tname, tinput, log_file)
 
-  # Tum moduller manuel olarak tamamlandi (1311842 commit).
-  # Bu liste gelecekteki moduller icin ornek olarak bırakıldı.
+            # Kısa özet göster
+            first_line = result.splitlines()[0] if result else ''
+            log(f"       → {first_line[:100]}", G if result.startswith('OK') else Y)
 
-  {
-    "id": "files",
-    "name": "Dosya Merkezi",
-    "has_migration": True,
-    "commit_msg": "feat: Dosya Merkezi -- multer upload API + file browser UI",
-    "prompt": CTX + """
-GOREV: Dosya Merkezi modülünü uygula.
-[Bu gorev zaten tamamlandi -- checkpoint'e bakiniz]
-"""
-  },
+            tool_results.append({
+                "type": "tool_result",
+                "tool_use_id": block.id,
+                "content": result,
+            })
 
-  {
-    "id": "performance",
-    "name": "Performans & Prim",
-    "has_migration": False,
-    "commit_msg": "feat: Performans & Prim -- aggregate reports + leaderboard UI",
-    "prompt": CTX + """
-GOREV: Performans & Prim modülünü uygula.
-[Bu gorev zaten tamamlandi -- checkpoint'e bakiniz]
-"""
-  },
+        messages.append({"role": "user", "content": tool_results})
 
-  {
-    "id": "notifications",
-    "name": "Bildirimler",
-    "has_migration": True,
-    "commit_msg": "feat: Bildirimler -- notification system + badge + UI",
-    "prompt": CTX + """
-GOREV: Bildirim sistemini uygula.
-[Bu gorev zaten tamamlandi -- checkpoint'e bakiniz]
-"""
-  },
-
-  {
-    "id": "costs",
-    "name": "Maliyet Merkezi",
-    "has_migration": True,
-    "commit_msg": "feat: Maliyet Merkezi -- cost tracking + CRUD API + UI",
-    "prompt": CTX + """
-GOREV: Maliyet Merkezi modülünü uygula.
-[Bu gorev zaten tamamlandi -- checkpoint'e bakiniz]
-"""
-  },
-
-  {
-    "id": "admin_enhanced",
-    "name": "Yonetim Paneli (Gelistirilmis)",
-    "has_migration": True,
-    "commit_msg": "feat: Yonetim Paneli -- audit log + sistem istatistikleri + 3-tab UI",
-    "prompt": CTX + """
-GOREV: Yonetim Paneli'ni gelistir.
-[Bu gorev zaten tamamlandi -- checkpoint'e bakiniz]
-"""
-  },
-
-  {
-    "id": "ustabot",
-    "name": "UstaBot AI Asistani",
-    "has_migration": False,
-    "commit_msg": "feat: UstaBot -- Anthropic SDK streaming chat + UI",
-    "prompt": CTX + """
-GOREV: UstaBot AI asistan modülünü uygula.
-[Bu gorev zaten tamamlandi -- checkpoint'e bakiniz]
-"""
-  },
-]
+    log(f"  [!] Maksimum iterasyon ({MAX_ITERS}) aşıldı", R)
+    return False
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# GOREV CALISTIRICI
+# GÖREV ÇALIŞTIRICISI
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-def run_task(task, ckpt):
-    """Tek bir gorevi calistirir. Basarı durumunu (bool) doner."""
+def run_task(task, ckpt, api_key):
     tid  = task['id']
     name = task['name']
 
-    log(f"\n{'-'*54}", B)
-    log(f" >> [{ts()}] BASLIYOR: {name}", W)
-    log(f"{'-'*54}", B)
+    log(f"\n{'-'*56}", B)
+    log(f" >> [{ts()}] BAŞLIYOR: {name}", W)
+    log(f"{'-'*56}", B)
 
     for attempt in range(1, 4):
         if attempt > 1:
             log(f"\n  ~> Yeniden deneniyor (deneme {attempt}/3)...", Y)
-            time.sleep(10)
+            time.sleep(8)
 
-        ok, _output = run_claude(task['prompt'], tid, attempt)
+        ok = run_with_sdk(tid, task['prompt'], api_key)
 
         if not ok:
-            log(f"  [!] Claude basarisiz (deneme {attempt})", R)
+            log(f"  [!] SDK çağrısı başarısız (deneme {attempt})", R)
             continue
 
-        log(f"  [+] Claude tamamlandi, degisiklikler kontrol ediliyor...", G)
-
-        # Gercekten dosya degisti mi?
         changes = git_changed_files()
         if not changes:
-            log(f"  [!] Dosya degisikligi YOK -- Claude arac kullanmadi!", R)
-            log(f"      Olasilik: prompt cok kisa, gorev zaten tamamlandi, veya bir hata var.", Y)
+            log(f"  [!] Dosya değişikliği tespit edilmedi (deneme {attempt})", R)
             if attempt < 3:
-                log(f"  ~> Daha detayli prompt ile tekrar denenecek...", Y)
+                task = dict(task)  # kopyala
+                task['prompt'] += (
+                    "\n\nÖNEMLİ: Önceki denemede dosya değişikliği tespit edilmedi. "
+                    "create_file veya edit_file araçlarını MUTLAKA kullan. "
+                    "Sadece metin yazmak yetmez — gerçekten dosya oluşturmalısın."
+                )
             continue
 
-        log(f"  [+] {len(changes)} dosya degisti:", G)
+        log(f"  [+] {len(changes)} dosya değişti:", G)
         for f in changes[:10]:
             log(f"      {f}", C)
         if len(changes) > 10:
             log(f"      ... ve {len(changes)-10} daha", C)
 
-        # Migration gerektiren gorevler icin
         if task.get('has_migration'):
             time.sleep(2)
             if not run_migration():
-                log(f"  [!] Migration basarisiz -- yeniden deneniyor", R)
+                log(f"  [!] Migration başarısız (deneme {attempt})", R)
                 continue
 
-        # Commit
         if git_commit(task['commit_msg']):
             ckpt.setdefault('completed', []).append(tid)
             ckpt[f'{tid}_completed_at'] = datetime.now().isoformat()
@@ -426,11 +520,270 @@ def run_task(task, ckpt):
             log(f"\n  *** {W}{name} TAMAMLANDI!{E}", G)
             return True
         else:
-            log(f"  [!] Git commit basarisiz (deneme {attempt})", R)
+            log(f"  [!] git commit başarısız (deneme {attempt})", R)
 
-    log(f"\n{R}[!!] {name} 3 denemede basarisiz oldu.{E}", R)
-    log(f"  Tekrar denemek icin: python orchestrator.py --from {tid}", Y)
+    log(f"\n{R}[!!] {name} 3 denemede başarısız.{E}", R)
+    log(f"  Tekrar: python orchestrator.py --from {tid}", Y)
     return False
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# TEST GÖREVİ
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TEST_TASK = {
+    "id": "sdk_test",
+    "name": "SDK Test Görevi",
+    "has_migration": False,
+    "commit_msg": "test: SDK orchestrator dogrulama",
+    "prompt": f"""Asagidaki gorevleri sirayla yap:
+
+1. run_command ile su komutu calistir: ls backend/src/routes/
+2. run_command ile su komutu calistir: ls backend/migrations/
+3. create_file araciyla backend/TEST_ORCHESTRATOR.md dosyasini olustur.
+   Dosya icerigi:
+   # Orchestrator SDK Test — BASARILI
+   Tarih: {datetime.now().strftime('%Y-%m-%d %H:%M')}
+   Model: claude-opus-4-5-20250514
+
+   ## backend/src/routes/ dosyalari
+   [adim 1 ciktisi]
+
+   ## backend/migrations/ dosyalari
+   [adim 2 ciktisi]
+
+   ## Sonuc
+   create_file araci kullanildi, dosya gercekten olusturuldu.
+   SDK orchestrator calisiyor.
+
+4. read_file ile backend/TEST_ORCHESTRATOR.md dosyasini oku ve dogrula.
+
+Bitince "GOREV TAMAMLANDI" yaz.""",
+}
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# GÖREVLER
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TASKS = [
+  {
+    "id": "files",
+    "name": "Dosya Merkezi",
+    "has_migration": True,
+    "commit_msg": "feat: Dosya Merkezi — multer upload API + file browser UI",
+    "prompt": """Dosya Merkezi modülünü uygula. Mevcut dosyaları önce read_file ile oku.
+
+ADIM 1 — backend/migrations/008_files.sql oluştur (create_file):
+  CREATE TABLE files (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    original_name TEXT NOT NULL,
+    stored_name   TEXT NOT NULL,
+    mime_type     TEXT,
+    size_bytes    BIGINT DEFAULT 0,
+    customer_id   UUID REFERENCES customers(id) ON DELETE SET NULL,
+    opportunity_id UUID REFERENCES opportunities(id) ON DELETE SET NULL,
+    offer_id      UUID REFERENCES offers(id) ON DELETE SET NULL,
+    uploaded_by   UUID NOT NULL REFERENCES users(id),
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+  CREATE INDEX idx_files_customer  ON files(customer_id);
+  CREATE INDEX idx_files_uploader  ON files(uploaded_by);
+  ALTER TABLE files ENABLE ROW LEVEL SECURITY;
+  CREATE POLICY files_select ON files FOR SELECT USING (
+    current_setting('app.user_role',TRUE) IN ('owner','coordinator','viewer')
+    OR uploaded_by::TEXT = current_setting('app.user_id',TRUE)
+  );
+  CREATE POLICY files_insert ON files FOR INSERT WITH CHECK (
+    current_setting('app.user_role',TRUE) IN ('owner','coordinator','sales')
+  );
+  CREATE POLICY files_delete ON files FOR DELETE USING (
+    current_setting('app.user_role',TRUE) IN ('owner','coordinator')
+    OR uploaded_by::TEXT = current_setting('app.user_id',TRUE)
+  );
+
+ADIM 2 — multer kur:
+  run_command: docker-compose exec -T backend npm install multer --save
+
+ADIM 3 — backend/src/routes/files.js oluştur (create_file) — ESM syntax:
+  GET /          → dosya listesi (query: customer_id?)
+  POST /upload   → multer.single('file') + DB insert
+  GET /:id/download → res.download()
+  DELETE /:id    → DB sil + fs.unlink
+
+ADIM 4 — backend/src/index.js güncelle (read_file ile önce oku, edit_file ile ekle):
+  import filesRouter + app.use('/api/v1/files', filesRouter)
+  start() içinde uploads klasörü: fs.mkdirSync('uploads', {recursive:true})
+
+ADIM 5 — frontend/src/pages/FilesPage.jsx oluştur — dosya listesi, yükle butonu, sil
+
+ADIM 6 — frontend/src/App.jsx güncelle:
+  import FilesPage → <Route path="dosyalar" element={<FilesPage />} />
+
+ADIM 7 — i18n TR/EN/RU/AR/FR'ye files section ekle (admin bloğundan önce)
+
+Bitince "GÖREV TAMAMLANDI" yaz.""",
+  },
+
+  {
+    "id": "performance",
+    "name": "Performans & Prim",
+    "has_migration": False,
+    "commit_msg": "feat: Performans & Prim — reports API + leaderboard UI",
+    "prompt": """Performans & Prim modülünü uygula. Migration gerekmez.
+
+ADIM 1 — backend/src/routes/reports.js oluştur:
+  GET /performance?period=month|quarter|year
+    Her satışçı için: won_value, won_count, lost_count, win_rate, activities_count
+    Period: month=30gün, quarter=90gün, year=365gün
+    owner/coordinator: tüm; sales: sadece kendisi
+  GET /leaderboard?period=month
+    won_value DESC sırala, rank ekle
+
+ADIM 2 — backend/src/index.js → reportsRouter ekle (read_file + edit_file)
+
+ADIM 3 — frontend/src/pages/PerformansPage.jsx:
+  3 period tab (Bu Ay/Çeyrek/Yıl), leaderboard tablo,
+  1.=🥇 2.=🥈 3.=🥉, win rate bar, kendi satırı highlighted
+
+ADIM 4 — App.jsx → PerformansPage route
+
+ADIM 5 — i18n performance section (5 dil)
+
+Bitince "GÖREV TAMAMLANDI" yaz.""",
+  },
+
+  {
+    "id": "notifications",
+    "name": "Bildirimler",
+    "has_migration": True,
+    "commit_msg": "feat: Bildirimler — notification system + badge + UI",
+    "prompt": """Bildirim sistemi uygula.
+
+ADIM 1 — backend/migrations/009_notifications.sql:
+  CREATE TABLE notifications (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    type TEXT NOT NULL CHECK (type IN ('opportunity_stage','followup_due','offer_sent','offer_accepted','system')),
+    title TEXT NOT NULL, body TEXT,
+    entity_type TEXT, entity_id UUID,
+    is_read BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+  CREATE INDEX idx_notif_user ON notifications(user_id);
+  CREATE INDEX idx_notif_unread ON notifications(user_id,is_read) WHERE is_read=FALSE;
+  ALTER TABLE notifications ENABLE ROW LEVEL SECURITY;
+  CREATE POLICY notif_own ON notifications FOR ALL
+    USING(user_id::TEXT=current_setting('app.user_id',TRUE))
+    WITH CHECK(user_id::TEXT=current_setting('app.user_id',TRUE));
+
+ADIM 2 — backend/src/routes/notifications.js:
+  GET /             → son 50 bildirim
+  GET /unread-count → {count:N}
+  POST /            → oluştur (owner/coordinator)
+  PATCH /:id/read   → okundu
+  PATCH /read-all   → hepsini okundu
+  DELETE /:id       → sil
+
+ADIM 3 — index.js → notificationsRouter ekle
+
+ADIM 4 — frontend/src/layouts/MainLayout.jsx:
+  iletisim nav item'ına unread badge ekle (kırmızı, 60sn polling)
+
+ADIM 5 — frontend/src/pages/IletisimBildirimlerPage.jsx yeniden yaz:
+  Gerçek API verisi, "Tümünü Okundu" butonu, tip ikonları
+
+ADIM 6 — i18n notifications section (5 dil)
+
+Bitince "GÖREV TAMAMLANDI" yaz.""",
+  },
+
+  {
+    "id": "costs",
+    "name": "Maliyet Merkezi",
+    "has_migration": True,
+    "commit_msg": "feat: Maliyet Merkezi — cost tracking + CRUD",
+    "prompt": """Maliyet Merkezi modülünü uygula.
+
+ADIM 1 — backend/migrations/010_costs.sql:
+  cost_categories tablosu (name, color) + 5 seed
+  costs tablosu (category_id, title, amount NUMERIC(15,2), currency, cost_date DATE,
+    customer_id, notes, created_by, timestamps)
+  RLS: owner/coordinator tam erişim, sales: kendi
+
+ADIM 2 — backend/src/routes/costs.js:
+  GET /categories → kategori listesi
+  GET / → liste + summary{grand_total, by_category}
+  POST / → yeni
+  PATCH /:id → güncelle
+  DELETE /:id → sil
+
+ADIM 3 — index.js → costsRouter
+
+ADIM 4 — frontend/src/pages/MaliyetPage.jsx:
+  KPI kartlar, kategori breakdown, tarih filtre, tablo, modal form
+
+ADIM 5 — App.jsx → MaliyetPage
+
+ADIM 6 — i18n costs (5 dil)
+
+Bitince "GÖREV TAMAMLANDI" yaz.""",
+  },
+
+  {
+    "id": "admin_enhanced",
+    "name": "Yönetim Paneli (Gelişmiş)",
+    "has_migration": True,
+    "commit_msg": "feat: Yönetim Paneli — audit log + istatistikler + 3-tab UI",
+    "prompt": """Yönetim Paneli'ni genişlet.
+
+ADIM 1 — backend/migrations/011_audit_log.sql:
+  audit_log (user_id, action CHECK IN create/update/delete/login,
+    entity_type, entity_id, details JSONB, ip_address, created_at)
+  RLS: owner/coordinator okur, herkes yazar
+
+ADIM 2 — backend/src/routes/admin.js'e EKLE (mevcut koda dokunma):
+  GET /stats → {users,customers,opportunities,offers,products}
+  GET /audit-log?page=1&limit=50 → LOG JOIN users ORDER BY created_at DESC
+
+ADIM 3 — frontend/src/pages/YonetimPaneliPage.jsx:
+  3. tab "Sistem İstatistikleri" ekle → /admin/stats 6 KPI kart
+  4. tab "Audit Log" ekle → /admin/audit-log tablo + pagination
+  Mevcut Kullanıcılar ve Yetki Matrisi tabları KOR
+
+ADIM 4 — i18n admin section'ına tabs.stats + tabs.auditLog ekle (5 dil)
+
+Bitince "GÖREV TAMAMLANDI" yaz.""",
+  },
+
+  {
+    "id": "ustabot",
+    "name": "UstaBot AI Asistanı",
+    "has_migration": False,
+    "commit_msg": "feat: UstaBot — Anthropic SSE streaming + chat UI",
+    "prompt": """UstaBot AI asistan modülünü uygula.
+
+ADIM 1 — @anthropic-ai/sdk kur:
+  run_command: docker-compose exec -T backend npm install @anthropic-ai/sdk --save
+
+ADIM 2 — backend/src/routes/ustabot.js:
+  GET /status → {available:!!process.env.ANTHROPIC_API_KEY}
+  POST /chat body:{messages:[{role,content}]}
+  SSE streaming: anthropic.messages.stream({model:'claude-haiku-4-5-20251001',max_tokens:1024,...})
+  chunk.type==='content_block_delta' → res.write('data: '+JSON.stringify({text}))
+  ANTHROPIC_API_KEY yoksa 503 dön
+
+ADIM 3 — index.js → ustabotRouter
+
+ADIM 4 — frontend/src/pages/UstaBotPage.jsx:
+  Tam chat UI, SSE streaming fetch, localStorage mesaj geçmişi,
+  kullanıcı sağ/bot sol mesaj balonları, typing indicator, gönder butonu
+
+ADIM 5 — App.jsx → UstaBotPage
+
+ADIM 6 — i18n ustabot section (5 dil)
+
+Bitince "GÖREV TAMAMLANDI" yaz.""",
+  },
+]
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -440,65 +793,68 @@ def main():
     args = sys.argv[1:]
     test_mode   = '--test'   in args
     status_mode = '--status' in args
+    set_key     = '--set-key' in args
     start_from  = None
     if '--from' in args:
         idx = args.index('--from')
         if idx + 1 < len(args):
             start_from = args[idx + 1]
+    if set_key:
+        idx = args.index('--set-key')
+        if idx + 1 < len(args):
+            save_api_key(args[idx + 1])
+            return
 
     setup()
     ckpt = load_ckpt()
 
-    print(f"\n{W}{C}  GD360 Orchestrator v2{E}")
-    print(f"{C}  {datetime.now().strftime('%Y-%m-%d %H:%M')}  |  claude: {CLAUDE}{E}")
-    print(f"{C}  Mod: {'--print YOK (arac kullanimi aktif)'}{E}\n")
-
-    if test_mode:
-        # ONEMLI: Bu script aktif bir Claude Code oturumu DISINDA calistirilmali.
-        # Iceride (Bash tool ile) calistirildiginda subprocess claude, mevcut oturumu devralir
-        # ve gorev yerine ozet yazdirabilir. Dogru kullanim:
-        #   Yeni PowerShell/cmd terminali ac → cd C:\Projects\GD360 → python orchestrator.py --test
-        log(f"{Y}[TEST MODU] Orchestrator dogrulama basliyor...{E}", Y)
-        log(f"{Y}NOT: Bu test Claude Code DISINDA (bagimsiz terminal) calistirildiginda dogru sonuc verir.{E}", Y)
-        check_docker()
-
-        # Onceki test dosyasini temizle
-        test_file = PROJECT_DIR / 'backend' / 'TEST_ORCHESTRATOR.md'
-        if test_file.exists():
-            test_file.unlink()
-            log(f"  Onceki test dosyasi silindi", Y)
-
-        ok = run_task(TEST_TASK, ckpt)
-
-        if ok and test_file.exists():
-            log(f"\n{G}{W}  [TEST GECTI] Claude arac kullandi ve dosya olusturdu!{E}", G)
-            log(f"  Dosya: {test_file}", G)
-            content_preview = test_file.read_text(encoding='utf-8')[:200]
-            log(f"  Icerik onizleme:\n{content_preview}", C)
-        elif ok:
-            log(f"\n{R}  [TEST BASARISIZ] Claude 'basarili' dedi ama dosya yok!{E}", R)
-            log(f"  Hala --print davranisi gosterebilir. Log dosyalarini inceleyin.", Y)
-        else:
-            log(f"\n{R}  [TEST BASARISIZ] Claude gorevi tamamlayamadi.{E}", R)
-
-        # Test dosyasini commit'e ekleme, temizle
-        if test_file.exists():
-            subprocess.run(['git', 'checkout', '--', 'backend/TEST_ORCHESTRATOR.md'],
-                          cwd=PROJECT_DIR, capture_output=True)
-            test_file.unlink(missing_ok=True)
-            log(f"  Test dosyasi temizlendi (commit'e eklenmedi)", Y)
-        return
+    print(f"\n{W}{C}  GD360 Orchestrator v3 — Anthropic SDK{E}")
+    print(f"{C}  {datetime.now():%Y-%m-%d %H:%M}  |  model: {MODEL}{E}\n")
 
     if status_mode:
         print_status(TASKS, ckpt)
         return
 
+    # API key kontrolü
+    api_key = get_api_key()
+    if not api_key:
+        log(f"{R}ANTHROPIC_API_KEY bulunamadı!{E}", R)
+        log("Seçenekler:", Y)
+        log("  1. Ortam değişkeni: set ANTHROPIC_API_KEY=sk-ant-...", Y)
+        log("  2. Kaydet: python orchestrator.py --set-key sk-ant-...", Y)
+        sys.exit(1)
+    log(f"  [+] API key: sk-ant-...{api_key[-6:]}", G)
+
     check_docker()
+
+    if test_mode:
+        log(f"{Y}[TEST] SDK + tool loop doğrulaması...{E}", Y)
+        test_file = PROJECT_DIR / 'backend' / 'TEST_ORCHESTRATOR.md'
+        if test_file.exists():
+            test_file.unlink()
+
+        task_copy = dict(TEST_TASK)
+        ok = run_task(task_copy, {}, api_key)
+
+        if ok and test_file.exists():
+            content = test_file.read_text(encoding='utf-8')
+            log(f"\n{G}{W}  [TEST GEÇTİ] Dosya oluşturuldu!{E}", G)
+            log(f"  İçerik önizleme:\n{content[:300]}", C)
+        elif ok:
+            log(f"\n{R}  [TEST BAŞARISIZ] Başarılı dedi ama dosya yok.{E}", R)
+        else:
+            log(f"\n{R}  [TEST BAŞARISIZ] Görev tamamlanamadı.{E}", R)
+
+        # Test dosyasını commit etme
+        subprocess.run(['git', 'checkout', '--', 'backend/TEST_ORCHESTRATOR.md'],
+                       cwd=PROJECT_DIR, capture_output=True)
+        if test_file.exists():
+            test_file.unlink(missing_ok=True)
+        return
+
     print_status(TASKS, ckpt)
 
     skipping = bool(start_from)
-    failed   = False
-
     for task in TASKS:
         tid = task['id']
 
@@ -512,18 +868,16 @@ def main():
                 continue
 
         if tid in ckpt.get('completed', []):
-            log(f"[SKIP] {task['name']} -- zaten tamamlandi", G)
+            log(f"[SKIP] {task['name']} — zaten tamamlandı", G)
             continue
 
-        if not run_task(task, ckpt):
-            failed = True
+        if not run_task(task, ckpt, api_key):
             sys.exit(1)
 
         time.sleep(5)
 
     print_status(TASKS, ckpt)
-    if not failed:
-        log(f"{G}{W}  [DONE] Tum moduller basariyla tamamlandi!{E}", G)
+    log(f"{G}{W}  [DONE] Tüm modüller tamamlandı!{E}", G)
 
 
 if __name__ == '__main__':
