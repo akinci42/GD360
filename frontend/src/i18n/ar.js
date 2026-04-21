@@ -10,7 +10,7 @@ export default {
       konfigurator:    'المُهيِّئ',
       dosyaMerkezi:    'مركز الملفات',
       performansPrim:  'الأداء والمكافآت',
-      canliBldirimler: 'الإشعارات المباشرة',
+      iletisimBildirimler: 'الاتصالات والإشعارات',
       maliyetMerkezi:  'مركز التكاليف',
       yonetimPaneli:   'لوحة الإدارة',
       ustaBot:         'UstaBot',

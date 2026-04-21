@@ -10,7 +10,7 @@ export default {
       konfigurator:    'Configurator',
       dosyaMerkezi:    'File Center',
       performansPrim:  'Performance & Bonus',
-      canliBldirimler: 'Live Notifications',
+      iletisimBildirimler: 'Communications & Notifications',
       maliyetMerkezi:  'Cost Center',
       yonetimPaneli:   'Admin Panel',
       ustaBot:         'UstaBot',

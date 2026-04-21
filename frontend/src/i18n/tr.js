@@ -10,7 +10,7 @@ export default {
       konfigurator:    'Konfiguratör',
       dosyaMerkezi:    'Dosya Merkezi',
       performansPrim:  'Performans & Prim',
-      canliBldirimler: 'Canlı Bildirimler',
+      iletisimBildirimler: 'İletişim ve Bildirimler',
       maliyetMerkezi:  'Maliyet Merkezi',
       yonetimPaneli:   'Yönetim Paneli',
       ustaBot:         'UstaBot',

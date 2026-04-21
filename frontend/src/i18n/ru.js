@@ -10,7 +10,7 @@ export default {
       konfigurator:    'Конфигуратор',
       dosyaMerkezi:    'Файловый центр',
       performansPrim:  'Эффективность и бонусы',
-      canliBldirimler: 'Уведомления',
+      iletisimBildirimler: 'Коммуникации и уведомления',
       maliyetMerkezi:  'Центр затрат',
       yonetimPaneli:   'Панель управления',
       ustaBot:         'UstaBot',

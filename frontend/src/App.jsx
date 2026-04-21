@@ -6,6 +6,7 @@ import DashboardPage from './pages/DashboardPage.jsx';
 import CrmPage from './pages/CrmPage.jsx';
 import SalesRadarPage from './pages/SalesRadarPage.jsx';
 import ActivitiesPage from './pages/ActivitiesPage.jsx';
+import IletisimBildirimlerPage from './pages/IletisimBildirimlerPage.jsx';
 
 function ProtectedRoute({ children }) {
   const token = useAuthStore(s => s.token);
@@ -34,7 +35,7 @@ export default function App() {
         <Route path="konfigurator"element={<div className="p-6 text-slate-400">Konfiguratör yakında...</div>} />
         <Route path="dosyalar"    element={<div className="p-6 text-slate-400">Dosya Merkezi yakında...</div>} />
         <Route path="performans"  element={<div className="p-6 text-slate-400">Performans & Prim yakında...</div>} />
-        <Route path="bildirimler" element={<div className="p-6 text-slate-400">Canlı Bildirimler yakında...</div>} />
+        <Route path="iletisim"    element={<IletisimBildirimlerPage />} />
         <Route path="maliyet"     element={<div className="p-6 text-slate-400">Maliyet Merkezi yakında...</div>} />
         <Route path="yonetim"     element={<div className="p-6 text-slate-400">Yönetim Paneli yakında...</div>} />
         <Route path="ustabot"     element={<div className="p-6 text-slate-400">UstaBot yakında...</div>} />

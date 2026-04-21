@@ -10,7 +10,7 @@ export default {
       konfigurator:    'Configurateur',
       dosyaMerkezi:    'Centre de fichiers',
       performansPrim:  'Performance & Primes',
-      canliBldirimler: 'Notifications en direct',
+      iletisimBildirimler: 'Communications et notifications',
       maliyetMerkezi:  'Centre des coûts',
       yonetimPaneli:   'Panneau d\'administration',
       ustaBot:         'UstaBot',
