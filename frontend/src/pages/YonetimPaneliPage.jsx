@@ -29,8 +29,8 @@ const PERM_MATRIX = {
   dosyaMerkezi:        { owner: 'full', coordinator: 'full', sales: 'own',  viewer: 'read' },
   performansPrim:      { owner: 'full', coordinator: 'full', sales: 'none', viewer: 'none' },
   iletisimBildirimler: { owner: 'full', coordinator: 'full', sales: 'full', viewer: 'read' },
-  maliyetMerkezi:      { owner: 'full', coordinator: 'read', sales: 'none', viewer: 'none' },
-  yonetimPaneli:       { owner: 'full', coordinator: 'none', sales: 'none', viewer: 'none' },
+  maliyetMerkezi:      { owner: 'full', coordinator: 'full', sales: 'none', viewer: 'none' },
+  yonetimPaneli:       { owner: 'full', coordinator: 'full', sales: 'none', viewer: 'none' },
   ustaBot:             { owner: 'full', coordinator: 'full', sales: 'full', viewer: 'full' },
 };
 
@@ -70,6 +70,8 @@ function UserFormModal({ user, onClose, onSaved }) {
     full_name: user?.full_name || '',
     email:     user?.email     || '',
     role:      user?.role      || 'sales',
+    level:     user?.level     || 2,
+    region:    user?.region    || '',
   });
   const [saving, setSaving] = useState(false);
   const [error,  setError]  = useState('');
@@ -79,10 +81,11 @@ function UserFormModal({ user, onClose, onSaved }) {
     setSaving(true);
     setError('');
     try {
+      const payload = { ...form, level: Number(form.level), region: form.region || null };
       if (user) {
-        await api.put(`/admin/users/${user.id}`, form);
+        await api.put(`/admin/users/${user.id}`, payload);
       } else {
-        await api.post('/admin/users', form);
+        await api.post('/admin/users', payload);
       }
       onSaved();
     } catch (err) {
@@ -115,17 +118,40 @@ function UserFormModal({ user, onClose, onSaved }) {
             required
           />
         </div>
+        <div className="flex gap-3">
+          <div className="flex-1">
+            <label className="block text-xs font-medium text-slate-400 mb-1">Rol</label>
+            <select
+              className="input w-full"
+              value={form.role}
+              onChange={e => setForm(f => ({ ...f, role: e.target.value }))}
+            >
+              {['owner', 'coordinator', 'sales', 'viewer'].map(r => (
+                <option key={r} value={r}>{t(`roles.${r}`)}</option>
+              ))}
+            </select>
+          </div>
+          <div className="w-24">
+            <label className="block text-xs font-medium text-slate-400 mb-1">Level</label>
+            <select
+              className="input w-full"
+              value={form.level}
+              onChange={e => setForm(f => ({ ...f, level: e.target.value }))}
+            >
+              {[1, 2, 3, 4].map(l => (
+                <option key={l} value={l}>L{l}</option>
+              ))}
+            </select>
+          </div>
+        </div>
         <div>
-          <label className="block text-xs font-medium text-slate-400 mb-1">{t('common.actions') === 'İşlemler' ? 'Rol' : 'Role'}</label>
-          <select
+          <label className="block text-xs font-medium text-slate-400 mb-1">Bölge / Sorumluluk</label>
+          <input
             className="input w-full"
-            value={form.role}
-            onChange={e => setForm(f => ({ ...f, role: e.target.value }))}
-          >
-            {['owner', 'coordinator', 'sales', 'viewer'].map(r => (
-              <option key={r} value={r}>{t(`roles.${r}`)}</option>
-            ))}
-          </select>
+            placeholder="örn. Türkiye, Özbekistan…"
+            value={form.region}
+            onChange={e => setForm(f => ({ ...f, region: e.target.value }))}
+          />
         </div>
         {!user && (
           <p className="text-xs text-slate-500">Varsayılan şifre ile oluşturulur: <span className="text-slate-300 font-mono">GD360!2024</span></p>
@@ -241,7 +267,7 @@ export default function YonetimPaneliPage() {
     }
   }
 
-  if (currentUser?.role !== 'owner') {
+  if (!['owner', 'coordinator'].includes(currentUser?.role)) {
     return (
       <div className="flex items-center justify-center h-full">
         <div className="text-center">
@@ -295,7 +321,8 @@ export default function YonetimPaneliPage() {
               <tr className="border-b border-dark-700">
                 <th className="text-left px-4 py-3 text-slate-400 font-medium">{t('admin.users.fullName')}</th>
                 <th className="text-left px-4 py-3 text-slate-400 font-medium">{t('common.email')}</th>
-                <th className="text-left px-4 py-3 text-slate-400 font-medium">Rol</th>
+                <th className="text-left px-4 py-3 text-slate-400 font-medium">Rol / Lvl</th>
+                <th className="text-left px-4 py-3 text-slate-400 font-medium">Bölge</th>
                 <th className="text-left px-4 py-3 text-slate-400 font-medium">{t('common.status')}</th>
                 <th className="text-left px-4 py-3 text-slate-400 font-medium">{t('admin.users.lastLogin')}</th>
                 <th className="text-right px-4 py-3 text-slate-400 font-medium">{t('common.actions')}</th>
@@ -303,10 +330,10 @@ export default function YonetimPaneliPage() {
             </thead>
             <tbody>
               {loading && (
-                <tr><td colSpan={6} className="text-center py-10 text-slate-500">{t('common.loading')}</td></tr>
+                <tr><td colSpan={7} className="text-center py-10 text-slate-500">{t('common.loading')}</td></tr>
               )}
               {!loading && users.length === 0 && (
-                <tr><td colSpan={6} className="text-center py-10 text-slate-500">{t('common.noData')}</td></tr>
+                <tr><td colSpan={7} className="text-center py-10 text-slate-500">{t('common.noData')}</td></tr>
               )}
               {users.map(u => (
                 <tr key={u.id} className={`border-b border-dark-700/50 transition-colors ${u.is_active ? 'hover:bg-dark-700/30' : 'opacity-50 hover:bg-dark-700/20'}`}>
@@ -321,9 +348,19 @@ export default function YonetimPaneliPage() {
                   </td>
                   <td className="px-4 py-3 text-slate-400 font-mono text-xs">{u.email}</td>
                   <td className="px-4 py-3">
-                    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${ROLE_COLORS[u.role]}`}>
-                      {t(`roles.${u.role}`)}
-                    </span>
+                    <div className="flex items-center gap-1.5">
+                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${ROLE_COLORS[u.role]}`}>
+                        {t(`roles.${u.role}`)}
+                      </span>
+                      {u.level && (
+                        <span className="text-xs px-1.5 py-0.5 rounded bg-dark-600 text-slate-400 font-mono">
+                          L{u.level}
+                        </span>
+                      )}
+                    </div>
+                  </td>
+                  <td className="px-4 py-3 text-slate-400 text-xs max-w-[160px]">
+                    <span className="truncate block" title={u.region || '—'}>{u.region || '—'}</span>
                   </td>
                   <td className="px-4 py-3">
                     <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
