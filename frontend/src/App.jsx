@@ -8,6 +8,7 @@ import SalesRadarPage from './pages/SalesRadarPage.jsx';
 import ActivitiesPage from './pages/ActivitiesPage.jsx';
 import IletisimBildirimlerPage from './pages/IletisimBildirimlerPage.jsx';
 import YonetimPaneliPage from './pages/YonetimPaneliPage.jsx';
+import CrmDetailPage from './pages/CrmDetailPage.jsx';
 
 function ProtectedRoute({ children }) {
   const token = useAuthStore(s => s.token);
@@ -30,6 +31,7 @@ export default function App() {
         <Route index element={<Navigate to="/dashboard" replace />} />
         <Route path="dashboard"   element={<DashboardPage />} />
         <Route path="crm"         element={<CrmPage />} />
+        <Route path="crm/:id"     element={<CrmDetailPage />} />
         <Route path="sales-radar" element={<SalesRadarPage />} />
         <Route path="activities"  element={<ActivitiesPage />} />
         <Route path="teklifler"   element={<div className="p-6 text-slate-400">Teklif Merkezi yakında...</div>} />

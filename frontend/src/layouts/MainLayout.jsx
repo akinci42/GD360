@@ -65,6 +65,7 @@ export default function MainLayout() {
             <NavLink
               key={item.key}
               to={item.path}
+              end={item.path !== '/crm'}
               className={({ isActive }) =>
                 `flex items-center gap-3 px-3 py-2 rounded-lg mb-0.5 text-sm transition-colors ${
                   isActive
