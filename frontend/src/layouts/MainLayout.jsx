@@ -1,6 +1,8 @@
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useAuthStore } from '../store/authStore.js';
+import { useState, useEffect } from 'react';
+import api from '../utils/api.js';
 
 const NAV_ITEMS = [
   { key: 'komutaMerkezi',  path: '/dashboard',    roles: ['owner', 'coordinator', 'sales', 'viewer'] },
@@ -36,6 +38,19 @@ export default function MainLayout() {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
   const { user, clearAuth } = useAuthStore();
+  const [unread, setUnread] = useState(0);
+
+  useEffect(() => {
+    async function fetchUnread() {
+      try {
+        const r = await api.get('/notifications', { params: { unread_only: true, limit: 1 } });
+        setUnread(r.data.meta?.unread || 0);
+      } catch { /* ignore */ }
+    }
+    fetchUnread();
+    const interval = setInterval(fetchUnread, 60_000);
+    return () => clearInterval(interval);
+  }, []);
 
   function logout() {
     clearAuth();
@@ -75,7 +90,12 @@ export default function MainLayout() {
               }
             >
               <span className="text-base w-5 text-center">{ICONS[item.key]}</span>
-              <span>{t(`nav.${item.key}`)}</span>
+              <span className="flex-1">{t(`nav.${item.key}`)}</span>
+              {item.key === 'iletisimBildirimler' && unread > 0 && (
+                <span className="text-xs bg-red-500 text-white rounded-full px-1.5 py-0.5 min-w-[18px] text-center leading-none">
+                  {unread > 99 ? '99+' : unread}
+                </span>
+              )}
             </NavLink>
           ))}
         </nav>

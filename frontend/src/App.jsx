@@ -11,6 +11,10 @@ import YonetimPaneliPage from './pages/YonetimPaneliPage.jsx';
 import CrmDetailPage from './pages/CrmDetailPage.jsx';
 import OffersPage from './pages/OffersPage.jsx';
 import ConfiguratorPage from './pages/ConfiguratorPage.jsx';
+import FilesPage from './pages/FilesPage.jsx';
+import PerformansPage from './pages/PerformansPage.jsx';
+import MaliyetPage from './pages/MaliyetPage.jsx';
+import UstaBotPage from './pages/UstaBotPage.jsx';
 
 function ProtectedRoute({ children }) {
   const token = useAuthStore(s => s.token);
@@ -38,12 +42,12 @@ export default function App() {
         <Route path="activities"   element={<ActivitiesPage />} />
         <Route path="teklifler"    element={<OffersPage />} />
         <Route path="konfigurator" element={<ConfiguratorPage />} />
-        <Route path="dosyalar"     element={<div className="p-6 text-slate-400">Dosya Merkezi yakında...</div>} />
-        <Route path="performans"   element={<div className="p-6 text-slate-400">Performans & Prim yakında...</div>} />
+        <Route path="dosyalar"     element={<FilesPage />} />
+        <Route path="performans"   element={<PerformansPage />} />
         <Route path="iletisim"     element={<IletisimBildirimlerPage />} />
-        <Route path="maliyet"      element={<div className="p-6 text-slate-400">Maliyet Merkezi yakında...</div>} />
+        <Route path="maliyet"      element={<MaliyetPage />} />
         <Route path="yonetim"      element={<YonetimPaneliPage />} />
-        <Route path="ustabot"      element={<div className="p-6 text-slate-400">UstaBot yakında...</div>} />
+        <Route path="ustabot"      element={<UstaBotPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

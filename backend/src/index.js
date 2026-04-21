@@ -13,6 +13,11 @@ import dashboardRouter from './routes/dashboard.js';
 import offersRouter from './routes/offers.js';
 import productsRouter from './routes/products.js';
 import configurationsRouter from './routes/configurations.js';
+import filesRouter from './routes/files.js';
+import reportsRouter from './routes/reports.js';
+import notificationsRouter from './routes/notifications.js';
+import costsRouter from './routes/costs.js';
+import ustaBotRouter from './routes/ustabot.js';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -34,6 +39,11 @@ app.use('/api/v1/dashboard', dashboardRouter);
 app.use('/api/v1/offers', offersRouter);
 app.use('/api/v1/products', productsRouter);
 app.use('/api/v1/configurations', configurationsRouter);
+app.use('/api/v1/files', filesRouter);
+app.use('/api/v1/reports', reportsRouter);
+app.use('/api/v1/notifications', notificationsRouter);
+app.use('/api/v1/costs', costsRouter);
+app.use('/api/v1/ustabot', ustaBotRouter);
 
 app.use((err, req, res, next) => {
   console.error(err);
