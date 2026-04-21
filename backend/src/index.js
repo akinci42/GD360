@@ -9,6 +9,10 @@ import customersRouter from './routes/customers.js';
 import opportunitiesRouter from './routes/opportunities.js';
 import followupsRouter from './routes/followups.js';
 import adminRouter from './routes/admin.js';
+import dashboardRouter from './routes/dashboard.js';
+import offersRouter from './routes/offers.js';
+import productsRouter from './routes/products.js';
+import configurationsRouter from './routes/configurations.js';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -26,6 +30,10 @@ app.use('/api/v1/customers', customersRouter);
 app.use('/api/v1/opportunities', opportunitiesRouter);
 app.use('/api/v1/followups', followupsRouter);
 app.use('/api/v1/admin', adminRouter);
+app.use('/api/v1/dashboard', dashboardRouter);
+app.use('/api/v1/offers', offersRouter);
+app.use('/api/v1/products', productsRouter);
+app.use('/api/v1/configurations', configurationsRouter);
 
 app.use((err, req, res, next) => {
   console.error(err);
