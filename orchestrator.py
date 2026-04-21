@@ -1,20 +1,19 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-GD360 Module Orchestrator v3 — Anthropic Python SDK
-claude CLI subprocess YOK. Doğrudan API + tool loop.
+GD360 Module Orchestrator v4 — Claude CLI (--no-session-persistence)
+Anthropic SDK YOK. claude CLI subprocess + --no-session-persistence flag.
 
 Kullanım:
   python orchestrator.py              -- kalan görevleri sırayla çalıştır
   python orchestrator.py --from ID    -- belirli görevden başla (öncekileri sıfırla)
   python orchestrator.py --test       -- basit test görevi
   python orchestrator.py --status     -- sadece durum göster
-  python orchestrator.py --set-key K  -- ANTHROPIC_API_KEY kaydet (backend/.env)
 """
 
 import json
 import os
-import re
+import shutil
 import subprocess
 import sys
 import time
@@ -27,13 +26,6 @@ if sys.platform == 'win32':
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
-try:
-    from anthropic import Anthropic
-except ImportError:
-    print("anthropic paketi bulunamadi. Kurmak için:")
-    print("  pip install anthropic")
-    sys.exit(1)
-
 # ── ANSI renkler ──────────────────────────────────────────────────────────────
 G = '\033[92m'; R = '\033[91m'; Y = '\033[93m'
 B = '\033[94m'; C = '\033[96m'; W = '\033[1m';  E = '\033[0m'
@@ -43,12 +35,18 @@ PROJECT_DIR = Path(__file__).parent.resolve()
 AGENT_DIR   = PROJECT_DIR / '.gd360-agent'
 CKPT_FILE   = AGENT_DIR  / 'checkpoint.json'
 LOGS_DIR    = AGENT_DIR  / 'logs'
-ENV_FILE    = PROJECT_DIR / 'backend' / '.env'
 
-# ── Model ─────────────────────────────────────────────────────────────────────
-MODEL      = 'claude-opus-4-5-20250514'   # En iyi kodlama kalitesi için
-MAX_TOKENS = 8192
-MAX_ITERS  = 60   # Tek görev başına maksimum tool-loop iterasyonu
+# ── Bash executable (Git Bash öncelikli, fallback sistem bash) ────────────────
+def find_bash():
+    candidates = [
+        r'C:\Program Files\Git\usr\bin\bash.exe',
+        r'C:\Program Files (x86)\Git\usr\bin\bash.exe',
+        shutil.which('bash') or '',
+    ]
+    for c in candidates:
+        if c and Path(c).exists():
+            return c
+    raise FileNotFoundError("bash bulunamadı — Git for Windows kurulu olmalı")
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 def log(msg, color=E):
@@ -73,201 +71,6 @@ def load_ckpt():
 
 def save_ckpt(ckpt):
     CKPT_FILE.write_text(json.dumps(ckpt, indent=2, ensure_ascii=False), encoding='utf-8')
-
-# ── API Key ───────────────────────────────────────────────────────────────────
-def get_api_key():
-    # 1. Ortam değişkeni
-    key = os.environ.get('ANTHROPIC_API_KEY', '')
-    if key.startswith('sk-ant'):
-        return key
-    # 2. backend/.env dosyası
-    if ENV_FILE.exists():
-        for line in ENV_FILE.read_text(encoding='utf-8').splitlines():
-            line = line.strip()
-            if line.startswith('ANTHROPIC_API_KEY=') and not line.startswith('#'):
-                val = line.split('=', 1)[1].strip().strip('"\'')
-                if val.startswith('sk-ant'):
-                    return val
-    return ''
-
-def save_api_key(key):
-    content = ENV_FILE.read_text(encoding='utf-8') if ENV_FILE.exists() else ''
-    if 'ANTHROPIC_API_KEY=' in content:
-        lines = []
-        for line in content.splitlines():
-            if line.startswith('ANTHROPIC_API_KEY=') or line.startswith('# ANTHROPIC_API_KEY='):
-                lines.append(f'ANTHROPIC_API_KEY={key}')
-            else:
-                lines.append(line)
-        ENV_FILE.write_text('\n'.join(lines) + '\n', encoding='utf-8')
-    else:
-        with open(ENV_FILE, 'a', encoding='utf-8') as f:
-            f.write(f'\nANTHROPIC_API_KEY={key}\n')
-    log(f"  [+] API anahtarı backend/.env dosyasına kaydedildi", G)
-
-# ── Path resolution ────────────────────────────────────────────────────────────
-def resolve_path(path_str):
-    """Relative veya absolute path'i PROJECT_DIR içinde güvenli şekilde çözer."""
-    p = path_str.replace('\\', '/').strip()
-    # Absolute path → projeye göre relativize et
-    for prefix in [
-        'C:/Projects/GD360/', '/Projects/GD360/',
-        str(PROJECT_DIR).replace('\\', '/') + '/',
-    ]:
-        if p.startswith(prefix):
-            p = p[len(prefix):]
-            break
-    # Başında / varsa kaldır
-    p = p.lstrip('/')
-    resolved = (PROJECT_DIR / p).resolve()
-    # Güvenlik: proje dışına çıkma
-    try:
-        resolved.relative_to(PROJECT_DIR)
-    except ValueError:
-        raise ValueError(f"Güvenlik hatası: proje dışı yol: {path_str}")
-    return resolved
-
-# ── Tool tanımları ─────────────────────────────────────────────────────────────
-TOOLS = [
-    {
-        "name": "create_file",
-        "description": (
-            "Yeni bir dosya oluşturur veya varsa üzerine yazar. "
-            "Gerekli parent dizinleri otomatik oluşturur. "
-            "Path, proje kökünden relative veya C:\\Projects\\GD360\\ ile başlayan absolute olabilir."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "path":    {"type": "string", "description": "Dosya yolu (relative veya absolute)"},
-                "content": {"type": "string", "description": "Dosya içeriği"},
-            },
-            "required": ["path", "content"],
-        },
-    },
-    {
-        "name": "edit_file",
-        "description": (
-            "Mevcut bir dosyada old_text'i new_text ile değiştirir (ilk eşleşme). "
-            "old_text tam eşleşme gerektirir — boşluk ve satır sonları dahil. "
-            "Değişiklik yoksa hata döner."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "path":     {"type": "string"},
-                "old_text": {"type": "string", "description": "Değiştirilecek metin (tam eşleşme)"},
-                "new_text": {"type": "string", "description": "Yerine yazılacak metin"},
-            },
-            "required": ["path", "old_text", "new_text"],
-        },
-    },
-    {
-        "name": "read_file",
-        "description": "Dosya içeriğini okur ve döner. Büyük dosyalar için offset/limit parametreleri kullan.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "path":   {"type": "string"},
-                "offset": {"type": "integer", "description": "Başlangıç satır numarası (0-indexed, opsiyonel)"},
-                "limit":  {"type": "integer", "description": "Okunacak max satır sayısı (opsiyonel)"},
-            },
-            "required": ["path"],
-        },
-    },
-    {
-        "name": "run_command",
-        "description": (
-            "Shell komutu çalıştırır (cwd=C:\\Projects\\GD360). "
-            "Komut çıktısı (stdout+stderr) döner, max 6000 karakter. "
-            "Örnekler: 'ls backend/src/routes/', "
-            "'docker-compose exec -T backend npm run migrate', "
-            "'git status --short'"
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "command": {"type": "string", "description": "Çalıştırılacak komut"},
-                "timeout": {"type": "integer", "description": "Saniye cinsinden timeout (default: 120)"},
-            },
-            "required": ["command"],
-        },
-    },
-]
-
-# ── Tool executor ──────────────────────────────────────────────────────────────
-def execute_tool(name, inp, log_file):
-    """Tool'u çalıştırır, sonucu döner ve log dosyasına yazar."""
-    try:
-        if name == "create_file":
-            path = resolve_path(inp["path"])
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(inp["content"], encoding='utf-8', errors='replace')
-            result = f"OK: Dosya oluşturuldu → {path.relative_to(PROJECT_DIR)}"
-
-        elif name == "edit_file":
-            path = resolve_path(inp["path"])
-            if not path.exists():
-                result = f"HATA: Dosya bulunamadı: {path.relative_to(PROJECT_DIR)}"
-            else:
-                content = path.read_text(encoding='utf-8', errors='replace')
-                old = inp["old_text"]
-                if old not in content:
-                    # Daha yararlı hata: ilk 80 karakter göster
-                    snippet = repr(old[:80])
-                    result = (
-                        f"HATA: old_text dosyada bulunamadı.\n"
-                        f"Aranan (ilk 80 kr): {snippet}\n"
-                        f"Dosyanın mevcut içeriğini read_file ile okuyun ve tam metni kullanın."
-                    )
-                else:
-                    new_content = content.replace(old, inp["new_text"], 1)
-                    path.write_text(new_content, encoding='utf-8', errors='replace')
-                    result = f"OK: Düzenlendi → {path.relative_to(PROJECT_DIR)}"
-
-        elif name == "read_file":
-            path = resolve_path(inp["path"])
-            if not path.exists():
-                result = f"HATA: Dosya bulunamadı: {inp['path']}"
-            else:
-                lines = path.read_text(encoding='utf-8', errors='replace').splitlines()
-                offset = int(inp.get("offset", 0))
-                limit  = int(inp.get("limit", 500))
-                chunk  = lines[offset:offset + limit]
-                header = f"[{path.relative_to(PROJECT_DIR)}  satır {offset+1}-{offset+len(chunk)}/{len(lines)}]\n"
-                result = header + '\n'.join(f"{offset+i+1:4d}  {l}" for i, l in enumerate(chunk))
-
-        elif name == "run_command":
-            timeout = int(inp.get("timeout", 120))
-            r = subprocess.run(
-                inp["command"], shell=True, cwd=PROJECT_DIR,
-                capture_output=True, text=True, encoding='utf-8',
-                errors='replace', timeout=timeout
-            )
-            out = (r.stdout or '') + (r.stderr or '')
-            out = out.strip()
-            if not out:
-                out = "(çıktı yok)"
-            if len(out) > 6000:
-                out = out[:2000] + "\n...[KISALTILDI]...\n" + out[-2000:]
-            rc = f"\n[exit code: {r.returncode}]"
-            result = out + rc
-        else:
-            result = f"HATA: Bilinmeyen tool: {name}"
-
-    except subprocess.TimeoutExpired:
-        result = f"HATA: Komut zaman aşımına uğradı"
-    except Exception as e:
-        result = f"HATA: {type(e).__name__}: {e}"
-
-    # Log'a yaz
-    with open(log_file, 'a', encoding='utf-8', errors='replace') as f:
-        f.write(f"\n[TOOL: {name}]\n")
-        f.write(f"INPUT: {json.dumps(inp, ensure_ascii=False)[:300]}\n")
-        f.write(f"RESULT: {result[:500]}\n")
-        f.write("-" * 40 + "\n")
-
-    return result
 
 # ── Git helpers ────────────────────────────────────────────────────────────────
 def git_changed_files():
@@ -324,8 +127,7 @@ def check_docker():
 def print_status(tasks, ckpt):
     done = set(ckpt.get('completed', []))
     print(f"\n{W}{'='*56}{E}")
-    print(f"{W}  GD360 Orchestrator v3 (SDK)  |  {datetime.now():%Y-%m-%d %H:%M}{E}")
-    print(f"{W}  Model: {MODEL}{E}")
+    print(f"{W}  GD360 Orchestrator v4 (CLI)  |  {datetime.now():%Y-%m-%d %H:%M}{E}")
     print(f"{W}{'='*56}{E}")
     for t in tasks:
         icon = f"{G}[OK]{E}" if t['id'] in done else f"{Y}[ ]{E}"
@@ -338,17 +140,17 @@ def print_status(tasks, ckpt):
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# SYSTEM PROMPT
+# GD360 SYSTEM CONTEXT (prompt'a eklenir)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-SYSTEM = """Sen GD360 projesinin geliştiricisisin. C:\\Projects\\GD360 dizininde çalışıyorsun.
-Verilen görevi adım adım tamamla.
+GD360_CONTEXT = """
+SEN GD360 PROJESİNİN GELİŞTİRİCİSİSİN. C:\\Projects\\GD360 dizininde çalışıyorsun.
 
 STACK:
 - Backend: Node.js 20 + Express 5 (ESM: import/export), PostgreSQL 16 + RLS, Redis 7
 - Frontend: React 18 + Vite + Tailwind CSS v3 dark tema
 - Docker Compose ortamı
 
-KRITIK BACKEND PATTERN (her route dosyası bu şablonu takip eder):
+KRİTİK BACKEND PATTERN (her route dosyası bu şablonu takip eder):
   import { Router } from 'express';
   import { authenticate } from '../middleware/auth.js';
   import { getRlsClient } from '../db/rls.js';
@@ -363,7 +165,7 @@ KRITIK BACKEND PATTERN (her route dosyası bu şablonu takip eder):
   });
   export default router;
 
-KRITIK FRONTEND PATTERN:
+KRİTİK FRONTEND PATTERN:
   import { useState, useEffect } from 'react';
   import { useTranslation } from 'react-i18next';
   import { useAuthStore } from '../store/authStore.js';
@@ -376,101 +178,82 @@ RLS SQL:
   current_setting('app.user_role', TRUE) IN ('owner','coordinator')
   current_setting('app.user_id', TRUE)
 
-ARAÇLAR:
-- Dosya okumak için read_file kullan (Edit'ten önce mutlaka oku)
-- Yeni dosya için create_file
-- Mevcut dosyayı düzeltmek için edit_file (old_text tam eşleşme!)
-- Komut çalıştırmak için run_command (ls, git, docker-compose, npm)
+GÖREV TAMAMLANINCA: "GÖREV TAMAMLANDI" yaz ve dur.
+"""
 
-İŞ BİTİNCE: "GÖREV TAMAMLANDI" yaz ve dur. Başka şey yapma."""
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# TOOL LOOP
+# CLI ÇALIŞTIRICISI
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-def run_with_sdk(task_id, prompt, api_key):
-    """API + tool loop. Başarı durumu döner."""
-    log_file = LOGS_DIR / f"{task_id}_{datetime.now().strftime('%H%M%S')}.log"
-    log(f"  [{ts()}] SDK tool loop başlıyor... log → {log_file.name}", C)
+def run_with_cli(task_id, prompt, attempt=1):
+    """Git Bash üzerinden claude --no-session-persistence stdin pipe ile çalıştır."""
+    log_file = LOGS_DIR / f"{task_id}_a{attempt}_{datetime.now().strftime('%H%M%S')}.log"
+    log(f"  [{ts()}] CLI başlıyor (deneme {attempt})... log → {log_file.name}", C)
 
-    client   = Anthropic(api_key=api_key)
-    messages = [{"role": "user", "content": prompt}]
+    full_prompt = GD360_CONTEXT.strip() + "\n\n" + "=" * 60 + "\n\n" + prompt
 
-    # Log başlığı
     with open(log_file, 'w', encoding='utf-8', errors='replace') as f:
-        f.write(f"TASK: {task_id}\nMODEL: {MODEL}\nTIME: {datetime.now().isoformat()}\n")
-        f.write("=" * 60 + "\n")
+        f.write(f"TASK: {task_id}  ATTEMPT: {attempt}\n")
+        f.write(f"TIME: {datetime.now().isoformat()}\n")
+        f.write("=" * 60 + "\n\n")
+        f.write(f"PROMPT (ilk 500 kr):\n{prompt[:500]}\n\n")
+        f.write("=" * 60 + "\n\n")
 
-    for iteration in range(1, MAX_ITERS + 1):
-        try:
-            response = client.messages.create(
-                model=MODEL,
-                max_tokens=MAX_TOKENS,
-                system=SYSTEM,
-                tools=TOOLS,
-                messages=messages,
-            )
-        except Exception as e:
-            log(f"  [!] API hatası: {e}", R)
-            with open(log_file, 'a', encoding='utf-8') as f:
-                f.write(f"API HATASI: {e}\n")
+    try:
+        bash = find_bash()
+    except FileNotFoundError as e:
+        log(f"  [!] {e}", R)
+        sys.exit(1)
+
+    bash_cmd = "claude --dangerously-skip-permissions --no-session-persistence --print"
+
+    try:
+        proc = subprocess.Popen(
+            [bash, '-c', bash_cmd],
+            cwd=str(PROJECT_DIR),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+
+        stdout_bytes, _ = proc.communicate(
+            input=full_prompt.encode('utf-8', errors='replace'),
+            timeout=600,
+        )
+        output = stdout_bytes.decode('utf-8', errors='replace')
+        rc = proc.returncode
+
+        with open(log_file, 'a', encoding='utf-8', errors='replace') as f:
+            f.write(f"OUTPUT:\n{output}\n\n[exit code: {rc}]\n")
+
+        # Son 30 satırı kullanıcıya göster
+        lines = output.strip().splitlines()
+        for line in lines[-30:]:
+            display = line[:120]
+            if display:
+                log(f"  {display}", C)
+
+        if rc != 0:
+            log(f"  [!] claude exit code: {rc}", R)
             return False
 
-        # Assistant yanıtını mesaj geçmişine ekle
-        messages.append({"role": "assistant", "content": response.content})
+        return True
 
-        # Metin blokları logla
-        for block in response.content:
-            if hasattr(block, 'text') and block.text:
-                snippet = block.text.strip()[:200]
-                log(f"  [Claude] {snippet}", C if 'TAMAMLANDI' not in snippet else G)
-                with open(log_file, 'a', encoding='utf-8', errors='replace') as f:
-                    f.write(f"\n[iter {iteration}] ASSISTANT TEXT:\n{block.text}\n")
-
-        if response.stop_reason == 'end_turn':
-            log(f"  [+] Claude görevi bitirdi ({iteration} iterasyon)", G)
-            return True
-
-        if response.stop_reason != 'tool_use':
-            log(f"  [!] Beklenmeyen stop_reason: {response.stop_reason}", R)
-            return False
-
-        # Tool çağrılarını işle
-        tool_results = []
-        for block in response.content:
-            if block.type != 'tool_use':
-                continue
-
-            tname = block.name
-            tinput = block.input
-
-            # Kullanıcıya göster
-            summary = ', '.join(
-                f"{k}={repr(str(v)[:60])}" for k, v in tinput.items()
-            )
-            log(f"  [{iteration:2d}] {tname}({summary})", B)
-
-            result = execute_tool(tname, tinput, log_file)
-
-            # Kısa özet göster
-            first_line = result.splitlines()[0] if result else ''
-            log(f"       → {first_line[:100]}", G if result.startswith('OK') else Y)
-
-            tool_results.append({
-                "type": "tool_result",
-                "tool_use_id": block.id,
-                "content": result,
-            })
-
-        messages.append({"role": "user", "content": tool_results})
-
-    log(f"  [!] Maksimum iterasyon ({MAX_ITERS}) aşıldı", R)
-    return False
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        log(f"  [!] Zaman aşımı (600s)", R)
+        with open(log_file, 'a', encoding='utf-8', errors='replace') as f:
+            f.write("HATA: Zaman aşımı (600s)\n")
+        return False
+    except Exception as e:
+        log(f"  [!] Hata: {type(e).__name__}: {e}", R)
+        return False
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # GÖREV ÇALIŞTIRICISI
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-def run_task(task, ckpt, api_key):
+def run_task(task, ckpt):
     tid  = task['id']
     name = task['name']
 
@@ -478,27 +261,28 @@ def run_task(task, ckpt, api_key):
     log(f" >> [{ts()}] BAŞLIYOR: {name}", W)
     log(f"{'-'*56}", B)
 
+    prompt = task['prompt']
+
     for attempt in range(1, 4):
         if attempt > 1:
             log(f"\n  ~> Yeniden deneniyor (deneme {attempt}/3)...", Y)
             time.sleep(8)
+            # Dosya değişikliği olmadığında ek talimat ekle
+            prompt = task['prompt'] + (
+                f"\n\nÖNEMLİ (deneme {attempt}): Önceki denemede dosya değişikliği tespit edilmedi. "
+                "Bahsettiğin dosyaları GERÇEKTEN oluştur/düzenle. "
+                "Write veya Edit araçlarını kullanmadan görev tamamlanmış sayılmaz."
+            )
 
-        ok = run_with_sdk(tid, task['prompt'], api_key)
+        ok = run_with_cli(tid, prompt, attempt)
 
         if not ok:
-            log(f"  [!] SDK çağrısı başarısız (deneme {attempt})", R)
+            log(f"  [!] CLI çağrısı başarısız (deneme {attempt})", R)
             continue
 
         changes = git_changed_files()
         if not changes:
             log(f"  [!] Dosya değişikliği tespit edilmedi (deneme {attempt})", R)
-            if attempt < 3:
-                task = dict(task)  # kopyala
-                task['prompt'] += (
-                    "\n\nÖNEMLİ: Önceki denemede dosya değişikliği tespit edilmedi. "
-                    "create_file veya edit_file araçlarını MUTLAKA kullan. "
-                    "Sadece metin yazmak yetmez — gerçekten dosya oluşturmalısın."
-                )
             continue
 
         log(f"  [+] {len(changes)} dosya değişti:", G)
@@ -531,31 +315,31 @@ def run_task(task, ckpt, api_key):
 # TEST GÖREVİ
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 TEST_TASK = {
-    "id": "sdk_test",
-    "name": "SDK Test Görevi",
+    "id": "cli_test",
+    "name": "CLI Test Görevi",
     "has_migration": False,
-    "commit_msg": "test: SDK orchestrator dogrulama",
+    "commit_msg": "test: CLI orchestrator dogrulama",
     "prompt": f"""Asagidaki gorevleri sirayla yap:
 
-1. run_command ile su komutu calistir: ls backend/src/routes/
-2. run_command ile su komutu calistir: ls backend/migrations/
-3. create_file araciyla backend/TEST_ORCHESTRATOR.md dosyasini olustur.
-   Dosya icerigi:
-   # Orchestrator SDK Test — BASARILI
+1. backend/src/routes/ dizinini listele (ls veya dir komutu)
+2. backend/migrations/ dizinini listele
+3. backend/TEST_ORCHESTRATOR.md dosyasini olustur:
+   # Orchestrator CLI Test — BASARILI
    Tarih: {datetime.now().strftime('%Y-%m-%d %H:%M')}
-   Model: claude-opus-4-5-20250514
+   Flag: --no-session-persistence
 
-   ## backend/src/routes/ dosyalari
-   [adim 1 ciktisi]
+   Adim 1 ciktisi (routes/):
+   [buraya listele]
 
-   ## backend/migrations/ dosyalari
-   [adim 2 ciktisi]
+   Adim 2 ciktisi (migrations/):
+   [buraya listele]
 
    ## Sonuc
-   create_file araci kullanildi, dosya gercekten olusturuldu.
-   SDK orchestrator calisiyor.
+   claude --no-session-persistence -p calisti.
+   Dosya Write araci ile olusturuldu.
+   CLI orchestrator calisiyor.
 
-4. read_file ile backend/TEST_ORCHESTRATOR.md dosyasini oku ve dogrula.
+4. Olusturdugun dosyayi oku ve icerigi dogrula.
 
 Bitince "GOREV TAMAMLANDI" yaz.""",
 }
@@ -570,9 +354,9 @@ TASKS = [
     "name": "Dosya Merkezi",
     "has_migration": True,
     "commit_msg": "feat: Dosya Merkezi — multer upload API + file browser UI",
-    "prompt": """Dosya Merkezi modülünü uygula. Mevcut dosyaları önce read_file ile oku.
+    "prompt": """Dosya Merkezi modülünü uygula. Mevcut dosyaları önce oku.
 
-ADIM 1 — backend/migrations/008_files.sql oluştur (create_file):
+ADIM 1 — backend/migrations/008_files.sql oluştur:
   CREATE TABLE files (
     id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     original_name TEXT NOT NULL,
@@ -601,17 +385,16 @@ ADIM 1 — backend/migrations/008_files.sql oluştur (create_file):
   );
 
 ADIM 2 — multer kur:
-  run_command: docker-compose exec -T backend npm install multer --save
+  docker-compose exec -T backend npm install multer --save
 
-ADIM 3 — backend/src/routes/files.js oluştur (create_file) — ESM syntax:
+ADIM 3 — backend/src/routes/files.js oluştur (ESM syntax):
   GET /          → dosya listesi (query: customer_id?)
   POST /upload   → multer.single('file') + DB insert
   GET /:id/download → res.download()
   DELETE /:id    → DB sil + fs.unlink
 
-ADIM 4 — backend/src/index.js güncelle (read_file ile önce oku, edit_file ile ekle):
+ADIM 4 — backend/src/index.js güncelle (önce oku, sonra ekle):
   import filesRouter + app.use('/api/v1/files', filesRouter)
-  start() içinde uploads klasörü: fs.mkdirSync('uploads', {recursive:true})
 
 ADIM 5 — frontend/src/pages/FilesPage.jsx oluştur — dosya listesi, yükle butonu, sil
 
@@ -638,7 +421,7 @@ ADIM 1 — backend/src/routes/reports.js oluştur:
   GET /leaderboard?period=month
     won_value DESC sırala, rank ekle
 
-ADIM 2 — backend/src/index.js → reportsRouter ekle (read_file + edit_file)
+ADIM 2 — backend/src/index.js → reportsRouter ekle (önce oku, sonra ekle)
 
 ADIM 3 — frontend/src/pages/PerformansPage.jsx:
   3 period tab (Bu Ay/Çeyrek/Yıl), leaderboard tablo,
@@ -762,7 +545,7 @@ Bitince "GÖREV TAMAMLANDI" yaz.""",
     "prompt": """UstaBot AI asistan modülünü uygula.
 
 ADIM 1 — @anthropic-ai/sdk kur:
-  run_command: docker-compose exec -T backend npm install @anthropic-ai/sdk --save
+  docker-compose exec -T backend npm install @anthropic-ai/sdk --save
 
 ADIM 2 — backend/src/routes/ustabot.js:
   GET /status → {available:!!process.env.ANTHROPIC_API_KEY}
@@ -793,48 +576,32 @@ def main():
     args = sys.argv[1:]
     test_mode   = '--test'   in args
     status_mode = '--status' in args
-    set_key     = '--set-key' in args
     start_from  = None
     if '--from' in args:
         idx = args.index('--from')
         if idx + 1 < len(args):
             start_from = args[idx + 1]
-    if set_key:
-        idx = args.index('--set-key')
-        if idx + 1 < len(args):
-            save_api_key(args[idx + 1])
-            return
 
     setup()
     ckpt = load_ckpt()
 
-    print(f"\n{W}{C}  GD360 Orchestrator v3 — Anthropic SDK{E}")
-    print(f"{C}  {datetime.now():%Y-%m-%d %H:%M}  |  model: {MODEL}{E}\n")
+    print(f"\n{W}{C}  GD360 Orchestrator v4 — Claude CLI{E}")
+    print(f"{C}  {datetime.now():%Y-%m-%d %H:%M}  |  flag: --no-session-persistence{E}\n")
 
     if status_mode:
         print_status(TASKS, ckpt)
         return
 
-    # API key kontrolü
-    api_key = get_api_key()
-    if not api_key:
-        log(f"{R}ANTHROPIC_API_KEY bulunamadı!{E}", R)
-        log("Seçenekler:", Y)
-        log("  1. Ortam değişkeni: set ANTHROPIC_API_KEY=sk-ant-...", Y)
-        log("  2. Kaydet: python orchestrator.py --set-key sk-ant-...", Y)
-        sys.exit(1)
-    log(f"  [+] API key: sk-ant-...{api_key[-6:]}", G)
-
     check_docker()
 
     if test_mode:
-        log(f"{Y}[TEST] SDK + tool loop doğrulaması...{E}", Y)
+        log(f"{Y}[TEST] CLI + dosya oluşturma doğrulaması...{E}", Y)
         test_file = PROJECT_DIR / 'backend' / 'TEST_ORCHESTRATOR.md'
         if test_file.exists():
             test_file.unlink()
 
         task_copy = dict(TEST_TASK)
-        ok = run_task(task_copy, {}, api_key)
+        ok = run_task(task_copy, {})
 
         if ok and test_file.exists():
             content = test_file.read_text(encoding='utf-8')
@@ -871,7 +638,7 @@ def main():
             log(f"[SKIP] {task['name']} — zaten tamamlandı", G)
             continue
 
-        if not run_task(task, ckpt, api_key):
+        if not run_task(task, ckpt):
             sys.exit(1)
 
         time.sleep(5)
