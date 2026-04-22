@@ -1,2 +1,4 @@
 
 .gd360-agent/
+data/*.csv
+!data/.gitkeep
