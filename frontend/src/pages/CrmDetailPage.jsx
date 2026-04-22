@@ -717,7 +717,7 @@ export default function CrmDetailPage() {
               {customer.groups.map(g => (
                 <span key={g.id}
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-dark-700/60 border border-dark-500/40 text-sm text-slate-300">
-                  <span className="text-xs text-slate-500">{g.group_type === 'network' ? '🌐' : '🏢'}</span>
+                  <span className="text-xs text-slate-500">{{ distributor_network: '🌐', ownership_group: '🏢', geographic: '🗺️', custom: '🔖' }[g.group_type] || '🏷️'}</span>
                   {g.name}
                 </span>
               ))}
