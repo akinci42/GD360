@@ -14,7 +14,6 @@ Kullanım:
 
 import json
 import os
-import shutil
 import subprocess
 import sys
 import time
@@ -41,17 +40,6 @@ CODE_TO_DESKTOP  = AGENT_DIR  / 'code-to-desktop.json'   # Orkestratör → Desk
 
 WATCH_INTERVAL = 5  # saniye
 
-# ── Bash executable (Git Bash öncelikli, fallback sistem bash) ────────────────
-def find_bash():
-    candidates = [
-        r'C:\Program Files\Git\usr\bin\bash.exe',
-        r'C:\Program Files (x86)\Git\usr\bin\bash.exe',
-        shutil.which('bash') or '',
-    ]
-    for c in candidates:
-        if c and Path(c).exists():
-            return c
-    raise FileNotFoundError("bash bulunamadı — Git for Windows kurulu olmalı")
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 def log(msg, color=E):
@@ -469,7 +457,7 @@ GÖREV TAMAMLANINCA: "GÖREV TAMAMLANDI" yaz ve dur.
 # CLI ÇALIŞTIRICISI
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def run_with_cli(task_id, prompt, attempt=1):
-    """Git Bash üzerinden claude --no-session-persistence stdin pipe ile çalıştır."""
+    """shell=True ile claude CLI çalıştırır — Windows PATH'deki claude.cmd otomatik bulunur."""
     log_file = LOGS_DIR / f"{task_id}_a{attempt}_{datetime.now().strftime('%H%M%S')}.log"
     log(f"  [{ts()}] CLI başlıyor (deneme {attempt})... log → {log_file.name}", C)
 
@@ -483,47 +471,35 @@ def run_with_cli(task_id, prompt, attempt=1):
         f.write("=" * 60 + "\n\n")
 
     try:
-        bash = find_bash()
-    except FileNotFoundError as e:
-        log(f"  [!] {e}", R)
-        sys.exit(1)
-
-    bash_cmd = "claude --dangerously-skip-permissions --no-session-persistence --print"
-
-    try:
-        proc = subprocess.Popen(
-            [bash, '-c', bash_cmd],
+        r = subprocess.run(
+            ["claude", "--dangerously-skip-permissions", "--no-session-persistence", "-p", full_prompt],
             cwd=str(PROJECT_DIR),
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-        )
-
-        stdout_bytes, _ = proc.communicate(
-            input=full_prompt.encode('utf-8', errors='replace'),
+            shell=True,
+            capture_output=True,
+            text=True,
+            encoding='utf-8',
+            errors='replace',
             timeout=600,
         )
-        output = stdout_bytes.decode('utf-8', errors='replace')
-        rc = proc.returncode
+
+        output = (r.stdout or '') + (r.stderr or '')
 
         with open(log_file, 'a', encoding='utf-8', errors='replace') as f:
-            f.write(f"OUTPUT:\n{output}\n\n[exit code: {rc}]\n")
+            f.write(f"OUTPUT:\n{output}\n\n[exit code: {r.returncode}]\n")
 
-        # Son 30 satırı kullanıcıya göster
         lines = output.strip().splitlines()
         for line in lines[-30:]:
             display = line[:120]
             if display:
                 log(f"  {display}", C)
 
-        if rc != 0:
-            log(f"  [!] claude exit code: {rc}", R)
+        if r.returncode != 0:
+            log(f"  [!] claude exit code: {r.returncode}", R)
             return False
 
         return True
 
     except subprocess.TimeoutExpired:
-        proc.kill()
         log(f"  [!] Zaman aşımı (600s)", R)
         with open(log_file, 'a', encoding='utf-8', errors='replace') as f:
             f.write("HATA: Zaman aşımı (600s)\n")
