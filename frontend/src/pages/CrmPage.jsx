@@ -4,19 +4,45 @@ import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore.js';
 import api from '../utils/api.js';
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-const CHANNEL_COLORS = {
-  distributor: 'bg-purple-500/20 text-purple-300 border border-purple-500/30',
-  direct:      'bg-brand-500/20  text-brand-300  border border-brand-500/30',
-  broker:      'bg-amber-500/20  text-amber-300  border border-amber-500/30',
-  office:      'bg-teal-500/20   text-teal-300   border border-teal-500/30',
+// ─── Badge helpers ────────────────────────────────────────────────────────────
+const CUSTOMER_TYPE_COLORS = {
+  partner:      'bg-blue-500/20 text-blue-300 border border-blue-500/30',
+  direct:       'bg-slate-500/20 text-slate-300 border border-slate-500/30',
+  end_customer: 'bg-purple-500/20 text-purple-300 border border-purple-500/30',
 };
 
-function ChannelBadge({ type, t }) {
+const SUBTYPE_COLORS = {
+  distributor:     'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30',
+  regional_office: 'bg-teal-500/20 text-teal-300 border border-teal-500/30',
+};
+
+const STATUS_COLORS = {
+  active:      'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30',
+  passive:     'bg-amber-500/20 text-amber-300 border border-amber-500/30',
+  blacklisted: 'bg-red-500/20 text-red-300 border border-red-500/30',
+};
+
+function CustomerTypeBadge({ type, subtype, t }) {
   if (!type) return <span className="text-slate-600 text-xs">—</span>;
   return (
-    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${CHANNEL_COLORS[type] || 'bg-slate-700 text-slate-400'}`}>
-      {t(`crm.channels.${type}`)}
+    <div className="flex flex-col gap-0.5">
+      <span className={`text-xs px-2 py-0.5 rounded-full font-medium w-fit ${CUSTOMER_TYPE_COLORS[type] || 'bg-slate-700 text-slate-400'}`}>
+        {t(`crm.customerTypes.${type}`, type)}
+      </span>
+      {subtype && (
+        <span className={`text-xs px-2 py-0.5 rounded-full font-medium w-fit ${SUBTYPE_COLORS[subtype] || 'bg-slate-700 text-slate-400'}`}>
+          {t(`crm.partnerSubtypes.${subtype}`, subtype)}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function StatusBadge({ status, t }) {
+  if (!status) return null;
+  return (
+    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_COLORS[status] || 'bg-slate-700 text-slate-400'}`}>
+      {t(`crm.statuses.${status}`, status)}
     </span>
   );
 }
@@ -45,7 +71,7 @@ function NewCustomerModal({ onClose, onCreated, salespeople, currentUser }) {
   const [form, setForm] = useState({
     company_name: '', country: '', city: '', address: '',
     industry: '', website: '', phone: '', tax_number: '',
-    channel_type: '', notes: '',
+    customer_type: 'direct', partner_subtype: '', notes: '',
     assigned_to: currentUser.role === 'sales' ? currentUser.id : '',
   });
   const [contacts, setContacts] = useState([
@@ -81,7 +107,10 @@ function NewCustomerModal({ onClose, onCreated, salespeople, currentUser }) {
     const errs = {};
     if (!form.company_name.trim()) errs.company_name = t('crm.validation.companyRequired');
     if (!form.country.trim())      errs.country      = t('crm.validation.countryRequired');
-    if (!form.channel_type)        errs.channel_type = t('crm.validation.channelRequired');
+    if (!form.customer_type)       errs.customer_type = t('crm.validation.channelRequired');
+    if (form.customer_type === 'partner' && !form.partner_subtype) {
+      errs.partner_subtype = t('crm.validation.subtypeRequired');
+    }
     if (!form.assigned_to)         errs.assigned_to  = t('crm.validation.assignedRequired');
     const cErrs = contacts.map(c => c.full_name.trim() ? '' : t('crm.validation.contactNameRequired'));
     if (cErrs.some(Boolean)) errs.contacts = cErrs;
@@ -89,7 +118,9 @@ function NewCustomerModal({ onClose, onCreated, salespeople, currentUser }) {
 
     setSaving(true);
     try {
-      const { data: { data: customer } } = await api.post('/customers', form);
+      const payload = { ...form };
+      if (form.customer_type !== 'partner') payload.partner_subtype = null;
+      const { data: { data: customer } } = await api.post('/customers', payload);
       for (const c of contacts) {
         if (c.full_name.trim()) await api.post(`/customers/${customer.id}/contacts`, c);
       }
@@ -133,17 +164,32 @@ function NewCustomerModal({ onClose, onCreated, salespeople, currentUser }) {
                 <label className="block text-xs text-slate-400 mb-1">{t('crm.address')}</label>
                 <input className="input w-full" value={form.address} onChange={e => setF('address', e.target.value)} />
               </div>
+              {/* customer_type */}
               <div>
-                <label className="block text-xs text-slate-400 mb-1">{t('crm.channelType')} *</label>
-                <select className={`input w-full ${errors.channel_type ? 'border-red-500/70' : ''}`}
-                  value={form.channel_type} onChange={e => setF('channel_type', e.target.value)}>
-                  <option value="">—</option>
-                  {['distributor','direct','broker','office'].map(c => (
-                    <option key={c} value={c}>{t(`crm.channels.${c}`)}</option>
+                <label className="block text-xs text-slate-400 mb-1">{t('crm.customerType')} *</label>
+                <select className={`input w-full ${errors.customer_type ? 'border-red-500/70' : ''}`}
+                  value={form.customer_type}
+                  onChange={e => { setF('customer_type', e.target.value); if (e.target.value !== 'partner') setF('partner_subtype', ''); }}>
+                  {['partner', 'direct', 'end_customer'].map(v => (
+                    <option key={v} value={v}>{t(`crm.customerTypes.${v}`)}</option>
                   ))}
                 </select>
-                {errors.channel_type && <p className="text-xs text-red-400 mt-1">{errors.channel_type}</p>}
+                {errors.customer_type && <p className="text-xs text-red-400 mt-1">{errors.customer_type}</p>}
               </div>
+              {/* partner_subtype — only when partner */}
+              {form.customer_type === 'partner' && (
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">{t('crm.partnerSubtype')} *</label>
+                  <select className={`input w-full ${errors.partner_subtype ? 'border-red-500/70' : ''}`}
+                    value={form.partner_subtype} onChange={e => setF('partner_subtype', e.target.value)}>
+                    <option value="">—</option>
+                    {['distributor', 'regional_office'].map(v => (
+                      <option key={v} value={v}>{t(`crm.partnerSubtypes.${v}`)}</option>
+                    ))}
+                  </select>
+                  {errors.partner_subtype && <p className="text-xs text-red-400 mt-1">{errors.partner_subtype}</p>}
+                </div>
+              )}
               <div>
                 <label className="block text-xs text-slate-400 mb-1">{t('crm.assignedTo')} *</label>
                 <select className={`input w-full ${errors.assigned_to ? 'border-red-500/70' : ''}`}
@@ -250,7 +296,9 @@ export default function CrmPage() {
   const [filterOptions,  setFilterOptions]  = useState({ countries: [], salespeople: [] });
   const [search,         setSearch]         = useState('');
   const [filterCountry,  setFilterCountry]  = useState('');
-  const [filterChannel,  setFilterChannel]  = useState('');
+  const [filterType,     setFilterType]     = useState('');
+  const [filterSubtype,  setFilterSubtype]  = useState('');
+  const [filterStatus,   setFilterStatus]   = useState('');
   const [filterAssigned, setFilterAssigned] = useState('');
   const searchTimer = useRef(null);
   const LIMIT = 50;
@@ -259,23 +307,29 @@ export default function CrmPage() {
     api.get('/customers/filter-options').then(r => setFilterOptions(r.data.data)).catch(() => {});
   }, []);
 
+  // reset subtype when type changes away from partner
+  useEffect(() => {
+    if (filterType !== 'partner') setFilterSubtype('');
+  }, [filterType]);
+
   const load = useCallback(async (pg = 1) => {
     setLoading(true);
     try {
       const params = { page: pg, limit: LIMIT };
-      if (search)         params.search       = search;
-      if (filterCountry)  params.country      = filterCountry;
-      if (filterChannel)  params.channel_type = filterChannel;
-      if (filterAssigned) params.assigned_to  = filterAssigned;
+      if (search)         params.search          = search;
+      if (filterCountry)  params.country         = filterCountry;
+      if (filterType)     params.customer_type   = filterType;
+      if (filterSubtype)  params.partner_subtype = filterSubtype;
+      if (filterStatus)   params.status          = filterStatus;
+      if (filterAssigned) params.assigned_to     = filterAssigned;
       const r = await api.get('/customers', { params });
       setCustomers(r.data.data);
       setTotal(r.data.total);
       setPage(pg);
     } catch { /* interceptor */ }
     finally { setLoading(false); }
-  }, [search, filterCountry, filterChannel, filterAssigned]);
+  }, [search, filterCountry, filterType, filterSubtype, filterStatus, filterAssigned]);
 
-  // debounce search
   useEffect(() => {
     clearTimeout(searchTimer.current);
     searchTimer.current = setTimeout(() => load(1), 350);
@@ -288,6 +342,7 @@ export default function CrmPage() {
   }
 
   const totalPages = Math.ceil(total / LIMIT);
+  const hasFilters = search || filterCountry || filterType || filterSubtype || filterStatus || filterAssigned;
 
   return (
     <div className="p-6">
@@ -305,57 +360,86 @@ export default function CrmPage() {
       </div>
 
       {/* Filters */}
-      <div className="card mb-4 flex flex-wrap gap-3 items-center">
-        <input
-          className="input flex-1 min-w-52"
-          placeholder={t('crm.searchPlaceholder')}
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-        />
-        <select className="input w-44" value={filterCountry} onChange={e => { setFilterCountry(e.target.value); }}>
-          <option value="">{t('crm.allCountries')}</option>
-          {filterOptions.countries.map(c => <option key={c} value={c}>{c}</option>)}
-        </select>
-        <select className="input w-44" value={filterChannel} onChange={e => { setFilterChannel(e.target.value); }}>
-          <option value="">{t('crm.allChannels')}</option>
-          {['distributor','direct','broker','office'].map(c => (
-            <option key={c} value={c}>{t(`crm.channels.${c}`)}</option>
-          ))}
-        </select>
-        {['owner','coordinator'].includes(currentUser?.role) && (
-          <select className="input w-48" value={filterAssigned} onChange={e => { setFilterAssigned(e.target.value); }}>
-            <option value="">{t('crm.allSalespeople')}</option>
-            {filterOptions.salespeople.map(u => <option key={u.id} value={u.id}>{u.full_name}</option>)}
+      <div className="card mb-4 space-y-2">
+        <div className="flex flex-wrap gap-3 items-center">
+          {/* Search */}
+          <input
+            className="input flex-1 min-w-52"
+            placeholder={t('crm.searchPlaceholder')}
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+          />
+          {/* Country */}
+          <select className="input w-40" value={filterCountry}
+            onChange={e => { setFilterCountry(e.target.value); load(1); }}>
+            <option value="">{t('crm.allCountries')}</option>
+            {filterOptions.countries.map(c => <option key={c} value={c}>{c}</option>)}
           </select>
-        )}
-        {(search || filterCountry || filterChannel || filterAssigned) && (
-          <button
-            onClick={() => { setSearch(''); setFilterCountry(''); setFilterChannel(''); setFilterAssigned(''); }}
-            className="text-xs text-slate-400 hover:text-slate-200 transition-colors"
-          >✕ Temizle</button>
-        )}
+          {/* Customer type */}
+          <select className="input w-40" value={filterType}
+            onChange={e => { setFilterType(e.target.value); load(1); }}>
+            <option value="">{t('crm.allTypes')}</option>
+            {['partner','direct','end_customer'].map(v => (
+              <option key={v} value={v}>{t(`crm.customerTypes.${v}`)}</option>
+            ))}
+          </select>
+          {/* Subtype — only when type=partner */}
+          {filterType === 'partner' && (
+            <select className="input w-44" value={filterSubtype}
+              onChange={e => { setFilterSubtype(e.target.value); load(1); }}>
+              <option value="">{t('crm.allSubtypes')}</option>
+              {['distributor','regional_office'].map(v => (
+                <option key={v} value={v}>{t(`crm.partnerSubtypes.${v}`)}</option>
+              ))}
+            </select>
+          )}
+          {/* Status */}
+          <select className="input w-40" value={filterStatus}
+            onChange={e => { setFilterStatus(e.target.value); load(1); }}>
+            <option value="">{t('crm.allStatuses')}</option>
+            {['active','passive','blacklisted'].map(v => (
+              <option key={v} value={v}>{t(`crm.statuses.${v}`)}</option>
+            ))}
+          </select>
+          {/* Assigned — owner/coordinator only */}
+          {['owner','coordinator'].includes(currentUser?.role) && (
+            <select className="input w-48" value={filterAssigned}
+              onChange={e => { setFilterAssigned(e.target.value); load(1); }}>
+              <option value="">{t('crm.allSalespeople')}</option>
+              {filterOptions.salespeople.map(u => <option key={u.id} value={u.id}>{u.full_name}</option>)}
+            </select>
+          )}
+          {hasFilters && (
+            <button
+              onClick={() => { setSearch(''); setFilterCountry(''); setFilterType(''); setFilterSubtype(''); setFilterStatus(''); setFilterAssigned(''); }}
+              className="text-xs text-slate-400 hover:text-slate-200 transition-colors">
+              ✕ Temizle
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Table */}
       <div className="card p-0 overflow-hidden overflow-x-auto">
-        <table className="w-full text-sm min-w-[860px]">
+        <table className="w-full text-sm min-w-[960px]">
           <thead>
             <tr className="border-b border-dark-700">
               <th className="text-left px-4 py-3 text-slate-400 font-medium">Firma</th>
               <th className="text-left px-4 py-3 text-slate-400 font-medium">{t('crm.location')}</th>
-              <th className="text-left px-4 py-3 text-slate-400 font-medium">{t('crm.channelType')}</th>
+              <th className="text-left px-4 py-3 text-slate-400 font-medium">{t('crm.customerType')}</th>
+              <th className="text-left px-4 py-3 text-slate-400 font-medium">{t('crm.status')}</th>
               <th className="text-left px-4 py-3 text-slate-400 font-medium">Yetkili Kişi</th>
-              <th className="text-left px-4 py-3 text-slate-400 font-medium">Sorumlu</th>
+              <th className="text-left px-4 py-3 text-slate-400 font-medium">{t('crm.assignedTo')}</th>
               <th className="text-left px-4 py-3 text-slate-400 font-medium">{t('crm.lastActivity')}</th>
               <th className="w-8 px-2"></th>
             </tr>
           </thead>
           <tbody>
             {loading && (
-              <tr><td colSpan={7} className="text-center py-14 text-slate-500">{t('common.loading')}</td></tr>
+              <tr><td colSpan={8} className="text-center py-14 text-slate-500">{t('common.loading')}</td></tr>
             )}
             {!loading && customers.length === 0 && (
-              <tr><td colSpan={7} className="text-center py-14 text-slate-500">{t('common.noData')}</td></tr>
+              <tr><td colSpan={8} className="text-center py-14 text-slate-500">{t('common.noData')}</td></tr>
             )}
             {customers.map(c => (
               <tr
@@ -375,7 +459,12 @@ export default function CrmPage() {
                 <td className="px-4 py-3 text-slate-400 text-sm">
                   {[c.city, c.country].filter(Boolean).join(', ') || '—'}
                 </td>
-                <td className="px-4 py-3"><ChannelBadge type={c.channel_type} t={t} /></td>
+                <td className="px-4 py-3">
+                  <CustomerTypeBadge type={c.customer_type} subtype={c.partner_subtype} t={t} />
+                </td>
+                <td className="px-4 py-3">
+                  <StatusBadge status={c.status} t={t} />
+                </td>
                 <td className="px-4 py-3">
                   {c.primary_contact_name ? (
                     <div>

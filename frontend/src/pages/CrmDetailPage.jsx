@@ -5,11 +5,16 @@ import { useAuthStore } from '../store/authStore.js';
 import api from '../utils/api.js';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-const CHANNEL_COLORS = {
-  distributor: 'bg-purple-500/20 text-purple-300 border border-purple-500/30',
-  direct:      'bg-brand-500/20  text-brand-300  border border-brand-500/30',
-  broker:      'bg-amber-500/20  text-amber-300  border border-amber-500/30',
-  office:      'bg-teal-500/20   text-teal-300   border border-teal-500/30',
+const CUSTOMER_TYPE_COLORS = {
+  partner:      'bg-blue-500/20 text-blue-300 border border-blue-500/30',
+  direct:       'bg-slate-500/20 text-slate-300 border border-slate-500/30',
+  end_customer: 'bg-purple-500/20 text-purple-300 border border-purple-500/30',
+};
+
+const STATUS_COLORS = {
+  active:      'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30',
+  passive:     'bg-amber-500/20 text-amber-300 border border-amber-500/30',
+  blacklisted: 'bg-red-500/20 text-red-300 border border-red-500/30',
 };
 
 const STAGE_COLORS = {
@@ -23,6 +28,31 @@ const STAGE_COLORS = {
 };
 
 const FOLLOWUP_ICONS = { call: '📞', email: '✉️', meeting: '🤝', demo: '🖥️', site_visit: '🏭', other: '📌' };
+
+function CustomerTypeBadge({ type, subtype, t }) {
+  if (!type) return null;
+  return (
+    <span className="inline-flex flex-col items-start gap-0.5">
+      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${CUSTOMER_TYPE_COLORS[type] || ''}`}>
+        {t(`crm.customerTypes.${type}`)}
+      </span>
+      {subtype && (
+        <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-dark-600/60 text-slate-400 border border-dark-500/40">
+          {t(`crm.partnerSubtypes.${subtype}`)}
+        </span>
+      )}
+    </span>
+  );
+}
+
+function StatusBadge({ status, t }) {
+  if (!status) return null;
+  return (
+    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_COLORS[status] || ''}`}>
+      {t(`crm.statuses.${status}`)}
+    </span>
+  );
+}
 
 function Toast({ msg, onDone }) {
   useEffect(() => { const id = setTimeout(onDone, 3000); return () => clearTimeout(id); }, [onDone]);
@@ -200,13 +230,25 @@ function CompanyInfoForm({ customer, salespeople, canEdit, onSaved, t }) {
 
   async function handleSave() {
     if (!form.company_name?.trim()) { setError(t('crm.validation.companyRequired')); return; }
+    if (form.customer_type === 'partner' && !form.partner_subtype) {
+      setError(t('crm.validation.subtypeRequired')); return;
+    }
     setSaving(true);
     try {
       const payload = {
-        company_name: form.company_name, country: form.country, city: form.city,
-        address: form.address, industry: form.industry, website: form.website,
-        phone: form.phone, tax_number: form.tax_number, channel_type: form.channel_type,
-        notes: form.notes, assigned_to: form.assigned_to,
+        company_name:    form.company_name,
+        country:         form.country,
+        city:            form.city,
+        address:         form.address,
+        industry:        form.industry,
+        website:         form.website,
+        phone:           form.phone,
+        tax_number:      form.tax_number,
+        customer_type:   form.customer_type,
+        partner_subtype: form.customer_type === 'partner' ? form.partner_subtype : null,
+        status:          form.status,
+        notes:           form.notes,
+        assigned_to:     form.assigned_to,
       };
       const r = await api.patch(`/customers/${customer.id}`, payload);
       onSaved(r.data.data);
@@ -266,15 +308,74 @@ function CompanyInfoForm({ customer, salespeople, canEdit, onSaved, t }) {
         </div>
         <Field label={t('crm.address')} value={customer.address} fieldKey="address" />
         <div className="grid grid-cols-2 gap-3">
-          <Field label={t('crm.channelType')} value={customer.channel_type ? t(`crm.channels.${customer.channel_type}`) : null} fieldKey="channel_type"
-            options={['distributor','direct','broker','office'].map(c => ({ value: c, label: t(`crm.channels.${c}`) }))} />
+          <div>
+            <label className="block text-xs text-slate-500 mb-1">{t('crm.customerType')}</label>
+            {editing ? (
+              <select className="input w-full text-sm" value={form.customer_type || ''} onChange={e => { setF('customer_type', e.target.value); setF('partner_subtype', ''); }}>
+                <option value="">—</option>
+                {['partner','direct','end_customer'].map(c => (
+                  <option key={c} value={c}>{t(`crm.customerTypes.${c}`)}</option>
+                ))}
+              </select>
+            ) : (
+              <div className="py-1">
+                {customer.customer_type
+                  ? <CustomerTypeBadge type={customer.customer_type} subtype={customer.partner_subtype} t={t} />
+                  : <span className="text-slate-600 italic text-sm">—</span>}
+              </div>
+            )}
+          </div>
+          {(editing ? form.customer_type === 'partner' : customer.customer_type === 'partner') && (
+            <div>
+              <label className="block text-xs text-slate-500 mb-1">{t('crm.partnerSubtype')} *</label>
+              {editing ? (
+                <select className="input w-full text-sm" value={form.partner_subtype || ''} onChange={e => setF('partner_subtype', e.target.value)}>
+                  <option value="">—</option>
+                  {['distributor','regional_office'].map(s => (
+                    <option key={s} value={s}>{t(`crm.partnerSubtypes.${s}`)}</option>
+                  ))}
+                </select>
+              ) : (
+                <p className="text-sm text-slate-200 py-1">
+                  {customer.partner_subtype ? t(`crm.partnerSubtypes.${customer.partner_subtype}`) : <span className="text-slate-600 italic">—</span>}
+                </p>
+              )}
+            </div>
+          )}
+          {(editing ? form.customer_type !== 'partner' : customer.customer_type !== 'partner') && (
+            <Field label={t('crm.industry')} value={customer.industry} fieldKey="industry" />
+          )}
+        </div>
+        {customer.customer_type === 'partner' && !editing && (
           <Field label={t('crm.industry')} value={customer.industry} fieldKey="industry" />
+        )}
+        {editing && form.customer_type === 'partner' && (
+          <Field label={t('crm.industry')} value={customer.industry} fieldKey="industry" />
+        )}
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs text-slate-500 mb-1">{t('crm.status')}</label>
+            {editing ? (
+              <select className="input w-full text-sm" value={form.status || ''} onChange={e => setF('status', e.target.value)}>
+                <option value="">—</option>
+                {['active','passive','blacklisted'].map(s => (
+                  <option key={s} value={s}>{t(`crm.statuses.${s}`)}</option>
+                ))}
+              </select>
+            ) : (
+              <div className="py-1">
+                {customer.status
+                  ? <StatusBadge status={customer.status} t={t} />
+                  : <span className="text-slate-600 italic text-sm">—</span>}
+              </div>
+            )}
+          </div>
+          <Field label={t('crm.taxNumber')} value={customer.tax_number} fieldKey="tax_number" />
         </div>
         <div className="grid grid-cols-2 gap-3">
           <Field label={t('crm.phone')} value={customer.phone} fieldKey="phone" />
-          <Field label={t('crm.taxNumber')} value={customer.tax_number} fieldKey="tax_number" />
+          <Field label={t('crm.website')} value={customer.website} fieldKey="website" type="url" />
         </div>
-        <Field label={t('crm.website')} value={customer.website} fieldKey="website" type="url" />
         <div>
           <label className="block text-xs text-slate-500 mb-1">{t('crm.assignedTo')}</label>
           {editing ? (
@@ -406,7 +507,6 @@ export default function CrmDetailPage() {
     <div className="p-6 max-w-7xl mx-auto space-y-5">
       {/* ── Header ── */}
       <div>
-        {/* Breadcrumb */}
         <button onClick={() => navigate('/crm')} className="text-xs text-slate-500 hover:text-brand-400 transition-colors mb-4 flex items-center gap-1">
           ← {t('nav.crm')}
         </button>
@@ -419,11 +519,16 @@ export default function CrmDetailPage() {
                 <div>
                   <h1 className="text-xl font-bold text-slate-100">{customer.company_name}</h1>
                   <div className="flex flex-wrap items-center gap-2 mt-1.5">
-                    {customer.country && <span className="text-sm text-slate-400">{[customer.city, customer.country].filter(Boolean).join(', ')}</span>}
-                    {customer.channel_type && (
-                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${CHANNEL_COLORS[customer.channel_type] || ''}`}>
-                        {t(`crm.channels.${customer.channel_type}`)}
+                    {customer.country && (
+                      <span className="text-sm text-slate-400">
+                        {[customer.city, customer.country].filter(Boolean).join(', ')}
                       </span>
+                    )}
+                    {customer.customer_type && (
+                      <CustomerTypeBadge type={customer.customer_type} subtype={customer.partner_subtype} t={t} />
+                    )}
+                    {customer.status && (
+                      <StatusBadge status={customer.status} t={t} />
                     )}
                     <span className="text-xs text-slate-500">
                       {t('crm.sinceYear', { year: sinceYear })}
