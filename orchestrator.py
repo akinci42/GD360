@@ -456,12 +456,20 @@ GÖREV TAMAMLANINCA: "GÖREV TAMAMLANDI" yaz ve dur.
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # CLI ÇALIŞTIRICISI
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+AGENT_PREFIX = (
+    "Sen bir otomasyon agentisin. Sana verilen görevi HEMEN yap. "
+    "Soru sorma, onay isteme, açıklama yapma. "
+    "Direkt dosyaları oluştur/düzenle ve komutları çalıştır. "
+    "Write tool ile dosya yaz, Bash tool ile komut çalıştır. "
+    "Konuşma, sadece yap.\n\nGÖREV:\n"
+)
+
 def run_with_cli(task_id, prompt, attempt=1):
     """shell=True ile claude CLI çalıştırır — Windows PATH'deki claude.cmd otomatik bulunur."""
     log_file = LOGS_DIR / f"{task_id}_a{attempt}_{datetime.now().strftime('%H%M%S')}.log"
     log(f"  [{ts()}] CLI başlıyor (deneme {attempt})... log → {log_file.name}", C)
 
-    full_prompt = GD360_CONTEXT.strip() + "\n\n" + "=" * 60 + "\n\n" + prompt
+    full_prompt = AGENT_PREFIX + GD360_CONTEXT.strip() + "\n\n" + "=" * 60 + "\n\n" + prompt
 
     with open(log_file, 'w', encoding='utf-8', errors='replace') as f:
         f.write(f"TASK: {task_id}  ATTEMPT: {attempt}\n")
@@ -472,7 +480,7 @@ def run_with_cli(task_id, prompt, attempt=1):
 
     try:
         r = subprocess.run(
-            ["claude", "--dangerously-skip-permissions", "--no-session-persistence", "-p", full_prompt],
+            ["claude", "--dangerously-skip-permissions", "--no-session-persistence", "--verbose", "-p", full_prompt],
             cwd=str(PROJECT_DIR),
             shell=True,
             capture_output=True,
