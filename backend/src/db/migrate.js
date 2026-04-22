@@ -24,9 +24,11 @@ async function migrate() {
       .filter(f => f.endsWith('.sql'))
       .sort();
 
-    for (const file of files) {
-      if (appliedSet.has(file)) continue;
-      console.log(`Applying migration: ${file}`);
+    const pending = files.filter(f => !appliedSet.has(f));
+    console.log(`Found ${files.length} migration files, ${appliedSet.size} already applied, ${pending.length} pending.`);
+
+    for (const file of pending) {
+      console.log(`Applying: ${file} ...`);
       const sql = await readFile(join(migrationsDir, file), 'utf8');
       await client.query('BEGIN');
       try {
@@ -39,7 +41,12 @@ async function migrate() {
         throw new Error(`Migration ${file} failed: ${err.message}`);
       }
     }
-    console.log('All migrations applied.');
+
+    if (pending.length === 0) {
+      console.log('Already up to date — no new migrations to apply.');
+    } else {
+      console.log(`Done — ${pending.length} migration(s) applied successfully.`);
+    }
   } finally {
     client.release();
     await pool.end();
