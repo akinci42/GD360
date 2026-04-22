@@ -4,3 +4,5 @@ data/*.csv
 !data/.gitkeep
 backups/
 *.sql
+!backend/migrations/*.sql
+!backend/seeds/*.sql
