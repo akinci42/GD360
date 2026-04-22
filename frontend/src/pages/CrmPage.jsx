@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore.js';
 import api from '../utils/api.js';
 
@@ -287,6 +287,7 @@ export default function CrmPage() {
   const navigate = useNavigate();
   const currentUser = useAuthStore(s => s.user);
 
+  const [searchParams, setSearchParams] = useSearchParams();
   const [customers,      setCustomers]      = useState([]);
   const [total,          setTotal]          = useState(0);
   const [page,           setPage]           = useState(1);
@@ -294,23 +295,46 @@ export default function CrmPage() {
   const [showModal,      setShowModal]      = useState(false);
   const [toast,          setToast]          = useState('');
   const [filterOptions,  setFilterOptions]  = useState({ countries: [], salespeople: [] });
-  const [search,         setSearch]         = useState('');
-  const [filterCountry,  setFilterCountry]  = useState('');
-  const [filterType,     setFilterType]     = useState('');
-  const [filterSubtype,  setFilterSubtype]  = useState('');
-  const [filterStatus,   setFilterStatus]   = useState('');
-  const [filterAssigned, setFilterAssigned] = useState('');
+  // searchInput is the controlled input value; URL param drives the API
+  const [searchInput, setSearchInput] = useState(searchParams.get('search') || '');
   const searchTimer = useRef(null);
   const LIMIT = 50;
+
+  // Read all filter values from URL
+  const search         = searchParams.get('search')         || '';
+  const filterCountry  = searchParams.get('country')        || '';
+  const filterType     = searchParams.get('customer_type')  || '';
+  const filterSubtype  = searchParams.get('partner_subtype')|| '';
+  const filterStatus   = searchParams.get('status')         || '';
+  const filterAssigned = searchParams.get('assigned_to')    || '';
+
+  function setParam(key, value) {
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev);
+      if (value) next.set(key, value);
+      else next.delete(key);
+      // reset partner_subtype if customer_type changes away from partner
+      if (key === 'customer_type' && value !== 'partner') next.delete('partner_subtype');
+      return next;
+    }, { replace: true });
+  }
+
+  function clearFilters() {
+    setSearchInput('');
+    setSearchParams({}, { replace: true });
+  }
 
   useEffect(() => {
     api.get('/customers/filter-options').then(r => setFilterOptions(r.data.data)).catch(() => {});
   }, []);
 
-  // reset subtype when type changes away from partner
+  // Debounce searchInput → URL
   useEffect(() => {
-    if (filterType !== 'partner') setFilterSubtype('');
-  }, [filterType]);
+    clearTimeout(searchTimer.current);
+    searchTimer.current = setTimeout(() => setParam('search', searchInput), 350);
+    return () => clearTimeout(searchTimer.current);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchInput]);
 
   const load = useCallback(async (pg = 1) => {
     setLoading(true);
@@ -330,11 +354,7 @@ export default function CrmPage() {
     finally { setLoading(false); }
   }, [search, filterCountry, filterType, filterSubtype, filterStatus, filterAssigned]);
 
-  useEffect(() => {
-    clearTimeout(searchTimer.current);
-    searchTimer.current = setTimeout(() => load(1), 350);
-    return () => clearTimeout(searchTimer.current);
-  }, [load]);
+  useEffect(() => { load(1); }, [load]);
 
   function fmtDate(d) {
     if (!d) return null;
@@ -342,7 +362,7 @@ export default function CrmPage() {
   }
 
   const totalPages = Math.ceil(total / LIMIT);
-  const hasFilters = search || filterCountry || filterType || filterSubtype || filterStatus || filterAssigned;
+  const hasFilters = searchInput || filterCountry || filterType || filterSubtype || filterStatus || filterAssigned;
 
   return (
     <div className="p-6">
@@ -366,18 +386,18 @@ export default function CrmPage() {
           <input
             className="input flex-1 min-w-52"
             placeholder={t('crm.searchPlaceholder')}
-            value={search}
-            onChange={e => setSearch(e.target.value)}
+            value={searchInput}
+            onChange={e => setSearchInput(e.target.value)}
           />
           {/* Country */}
           <select className="input w-40" value={filterCountry}
-            onChange={e => { setFilterCountry(e.target.value); load(1); }}>
+            onChange={e => setParam('country', e.target.value)}>
             <option value="">{t('crm.allCountries')}</option>
             {filterOptions.countries.map(c => <option key={c} value={c}>{c}</option>)}
           </select>
           {/* Customer type */}
           <select className="input w-40" value={filterType}
-            onChange={e => { setFilterType(e.target.value); load(1); }}>
+            onChange={e => setParam('customer_type', e.target.value)}>
             <option value="">{t('crm.allTypes')}</option>
             {['partner','direct','end_customer'].map(v => (
               <option key={v} value={v}>{t(`crm.customerTypes.${v}`)}</option>
@@ -386,7 +406,7 @@ export default function CrmPage() {
           {/* Subtype — only when type=partner */}
           {filterType === 'partner' && (
             <select className="input w-44" value={filterSubtype}
-              onChange={e => { setFilterSubtype(e.target.value); load(1); }}>
+              onChange={e => setParam('partner_subtype', e.target.value)}>
               <option value="">{t('crm.allSubtypes')}</option>
               {['distributor','regional_office'].map(v => (
                 <option key={v} value={v}>{t(`crm.partnerSubtypes.${v}`)}</option>
@@ -395,7 +415,7 @@ export default function CrmPage() {
           )}
           {/* Status */}
           <select className="input w-40" value={filterStatus}
-            onChange={e => { setFilterStatus(e.target.value); load(1); }}>
+            onChange={e => setParam('status', e.target.value)}>
             <option value="">{t('crm.allStatuses')}</option>
             {['active','passive','blacklisted'].map(v => (
               <option key={v} value={v}>{t(`crm.statuses.${v}`)}</option>
@@ -404,14 +424,13 @@ export default function CrmPage() {
           {/* Assigned — owner/coordinator only */}
           {['owner','coordinator'].includes(currentUser?.role) && (
             <select className="input w-48" value={filterAssigned}
-              onChange={e => { setFilterAssigned(e.target.value); load(1); }}>
+              onChange={e => setParam('assigned_to', e.target.value)}>
               <option value="">{t('crm.allSalespeople')}</option>
               {filterOptions.salespeople.map(u => <option key={u.id} value={u.id}>{u.full_name}</option>)}
             </select>
           )}
           {hasFilters && (
-            <button
-              onClick={() => { setSearch(''); setFilterCountry(''); setFilterType(''); setFilterSubtype(''); setFilterStatus(''); setFilterAssigned(''); }}
+            <button onClick={clearFilters}
               className="text-xs text-slate-400 hover:text-slate-200 transition-colors">
               ✕ Temizle
             </button>

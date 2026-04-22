@@ -414,6 +414,7 @@ export default function CrmDetailPage() {
   const [opportunities,setOpportunities]= useState([]);
   const [followups,    setFollowups]    = useState([]);
   const [salespeople,  setSalespeople]  = useState([]);
+  const [hierarchyData,setHierarchyData]= useState(null); // { self, ancestors, children }
   const [loading,      setLoading]      = useState(true);
   const [contactModal, setContactModal] = useState(null); // null | 'new' | contact object
   const [toast,        setToast]        = useState('');
@@ -426,18 +427,20 @@ export default function CrmDetailPage() {
   const loadAll = useCallback(async () => {
     setLoading(true);
     try {
-      const [cust, conts, opps, fups, opts] = await Promise.all([
+      const [cust, conts, opps, fups, opts, hier] = await Promise.all([
         api.get(`/customers/${id}`),
         api.get(`/customers/${id}/contacts`),
         api.get(`/opportunities?customer_id=${id}&limit=20`),
         api.get(`/followups?customer_id=${id}&limit=10`),
         api.get('/customers/filter-options'),
+        api.get(`/customers/hierarchy/${id}`),
       ]);
       setCustomer(cust.data.data);
       setContacts(conts.data.data);
       setOpportunities(opps.data.data);
       setFollowups(fups.data.data);
       setSalespeople(opts.data.data.salespeople);
+      setHierarchyData(hier.data.data);
     } catch {
       navigate('/crm');
     } finally {
@@ -546,12 +549,12 @@ export default function CrmDetailPage() {
           </div>
 
           {/* KPI cards */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
             {[
-              { label: t('crm.kpi.totalProjects'),  value: totalProjects,        icon: '📁' },
-              { label: t('crm.kpi.revenue'),         value: fmtCurrency(wonRevenue), icon: '💵' },
-              { label: t('crm.kpi.activeOffers'),    value: activeOffers,         icon: '📄' },
-              { label: t('crm.kpi.lastContact'),     value: lastFollowup ? fmtDate(lastFollowup) : t('crm.kpi.lastContact'), icon: '📅' },
+              { label: t('crm.kpi.totalProjects'),  value: totalProjects },
+              { label: t('crm.kpi.revenue'),         value: fmtCurrency(wonRevenue) },
+              { label: t('crm.kpi.activeOffers'),    value: activeOffers },
+              { label: t('crm.kpi.lastContact'),     value: lastFollowup ? fmtDate(lastFollowup) : '—' },
             ].map((kpi, i) => (
               <div key={i} className="bg-dark-700/40 border border-dark-600 rounded-xl p-3">
                 <p className="text-xs text-slate-500 mb-1">{kpi.label}</p>
@@ -559,6 +562,18 @@ export default function CrmDetailPage() {
               </div>
             ))}
           </div>
+          {/* Historical quote count — prominent */}
+          {customer.historical_quote_count > 0 && (
+            <div className="border border-brand-500/20 bg-brand-500/5 rounded-xl px-4 py-3 mb-4 flex items-center justify-between gap-4">
+              <div className="flex-shrink-0">
+                <p className="text-xs text-slate-500">{t('crm.historicalQuotes')}</p>
+                <p className="text-3xl font-bold text-brand-300">{customer.historical_quote_count}</p>
+              </div>
+              <p className="text-xs text-slate-500 text-right leading-relaxed">
+                {t('crm.historicalQuotesHint', { count: customer.historical_quote_count })}
+              </p>
+            </div>
+          )}
 
           {/* Quick actions */}
           <div className="flex flex-wrap gap-2">
@@ -623,6 +638,88 @@ export default function CrmDetailPage() {
                   onSetPrimary={handleSetPrimary}
                   t={t}
                 />
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ── Hierarchy + Groups ── */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+        {/* Hierarchy panel */}
+        <div className="card lg:col-span-2">
+          <h3 className="text-sm font-semibold text-slate-200 mb-4">{t('crm.hierarchy')}</h3>
+          {(!hierarchyData || (hierarchyData.ancestors.length === 0 && hierarchyData.children.length === 0)) ? (
+            <p className="text-sm text-slate-500 italic text-center py-4">{t('crm.independentCustomer')}</p>
+          ) : (
+            <div className="space-y-4">
+              {/* Ancestors breadcrumb */}
+              {hierarchyData.ancestors.length > 0 && (
+                <div>
+                  <p className="text-xs text-slate-500 uppercase tracking-wider mb-2">{t('crm.parentCompany')}</p>
+                  <div className="flex items-center gap-1 flex-wrap">
+                    {hierarchyData.ancestors.map((a, i) => (
+                      <span key={a.id} className="flex items-center gap-1">
+                        {i > 0 && <span className="text-slate-600">›</span>}
+                        <button
+                          onClick={() => navigate(`/crm/${a.id}`)}
+                          className="text-sm text-brand-400 hover:text-brand-300 transition-colors font-medium">
+                          {a.company_name}
+                        </button>
+                        {a.country && <span className="text-xs text-slate-600">({a.country})</span>}
+                      </span>
+                    ))}
+                    <span className="text-slate-600">›</span>
+                    <span className="text-sm text-slate-300 font-medium">{customer.company_name}</span>
+                  </div>
+                </div>
+              )}
+              {/* Children grid */}
+              {hierarchyData.children.length > 0 && (
+                <div>
+                  <p className="text-xs text-slate-500 uppercase tracking-wider mb-2">
+                    {t('crm.subsidiaries')} ({hierarchyData.children.length})
+                  </p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {hierarchyData.children.map(child => (
+                      <div key={child.id}
+                        className="border border-dark-600 rounded-lg px-3 py-2.5 hover:bg-dark-700/40 transition-colors">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm text-slate-200 font-medium truncate">{child.company_name}</p>
+                            {child.country && <p className="text-xs text-slate-500 mt-0.5">{child.country}</p>}
+                            {child.historical_quote_count > 0 && (
+                              <p className="text-xs text-brand-400 mt-0.5">{child.historical_quote_count} {t('crm.historicalQuotes').toLowerCase()}</p>
+                            )}
+                          </div>
+                          <button
+                            onClick={() => navigate(`/crm/${child.id}`)}
+                            className="text-xs text-brand-400 hover:text-brand-300 transition-colors flex-shrink-0 border border-brand-500/30 px-2 py-0.5 rounded-md">
+                            {t('crm.openCustomer')}
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Groups panel */}
+        <div className="card">
+          <h3 className="text-sm font-semibold text-slate-200 mb-4">{t('crm.groups')}</h3>
+          {(!customer.groups || customer.groups.length === 0) ? (
+            <p className="text-sm text-slate-500 italic text-center py-4">{t('crm.noGroups')}</p>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              {customer.groups.map(g => (
+                <span key={g.id}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-dark-700/60 border border-dark-500/40 text-sm text-slate-300">
+                  <span className="text-xs text-slate-500">{g.group_type === 'network' ? '🌐' : '🏢'}</span>
+                  {g.name}
+                </span>
               ))}
             </div>
           )}
