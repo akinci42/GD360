@@ -9,6 +9,7 @@ Kullanım:
   python orchestrator.py --from ID    -- belirli görevden başla (öncekileri sıfırla)
   python orchestrator.py --test       -- basit test görevi
   python orchestrator.py --status     -- sadece durum göster
+  python orchestrator.py --watch      -- iki yönlü iletişim döngüsü (desktop↔code)
 """
 
 import json
@@ -31,10 +32,14 @@ G = '\033[92m'; R = '\033[91m'; Y = '\033[93m'
 B = '\033[94m'; C = '\033[96m'; W = '\033[1m';  E = '\033[0m'
 
 # ── Yollar ────────────────────────────────────────────────────────────────────
-PROJECT_DIR = Path(__file__).parent.resolve()
-AGENT_DIR   = PROJECT_DIR / '.gd360-agent'
-CKPT_FILE   = AGENT_DIR  / 'checkpoint.json'
-LOGS_DIR    = AGENT_DIR  / 'logs'
+PROJECT_DIR      = Path(__file__).parent.resolve()
+AGENT_DIR        = PROJECT_DIR / '.gd360-agent'
+CKPT_FILE        = AGENT_DIR  / 'checkpoint.json'
+LOGS_DIR         = AGENT_DIR  / 'logs'
+DESKTOP_TO_CODE  = AGENT_DIR  / 'desktop-to-code.json'   # Desktop → Orkestratör
+CODE_TO_DESKTOP  = AGENT_DIR  / 'code-to-desktop.json'   # Orkestratör → Desktop
+
+WATCH_INTERVAL = 5  # saniye
 
 # ── Bash executable (Git Bash öncelikli, fallback sistem bash) ────────────────
 def find_bash():
@@ -104,6 +109,12 @@ def git_commit(msg):
     log(f"  [!] git commit hatası: {r.stderr.strip()[-200:]}", R)
     return False
 
+def get_last_commit_hash():
+    r = subprocess.run(['git', 'rev-parse', '--short', 'HEAD'],
+                       cwd=PROJECT_DIR, capture_output=True,
+                       text=True, encoding='utf-8')
+    return r.stdout.strip() or 'unknown'
+
 def run_migration():
     log(f"  [{ts()}] Migration çalıştırılıyor...", Y)
     r = subprocess.run(
@@ -137,6 +148,278 @@ def print_status(tasks, ckpt):
     rem = sum(1 for t in tasks if t['id'] not in done)
     print(f"\n  Toplam: {len(tasks)}  Tamamlanan: {len(done)}  Kalan: {rem}")
     print(f"{W}{'='*56}{E}\n")
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# WATCH MODE — JSON PROTOKOL YARDIMCILARI
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+def read_json_safe(path):
+    try:
+        if path.exists():
+            return json.loads(path.read_text(encoding='utf-8'))
+    except Exception:
+        pass
+    return None
+
+def write_json_safe(path, data):
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding='utf-8')
+
+def get_pending_message():
+    """desktop-to-code.json'dan ilk 'pending' mesajı döner."""
+    data = read_json_safe(DESKTOP_TO_CODE)
+    if not data:
+        return None
+    for msg in data.get('messages', []):
+        if msg.get('status') == 'pending':
+            return msg
+    return None
+
+def mark_inbox_status(msg_id, status):
+    """desktop-to-code.json'da mesajın status'ünü günceller."""
+    data = read_json_safe(DESKTOP_TO_CODE) or {'messages': []}
+    for msg in data.get('messages', []):
+        if msg['id'] == msg_id:
+            msg['status'] = status
+            msg['processed_at'] = datetime.now().isoformat()
+            break
+    write_json_safe(DESKTOP_TO_CODE, data)
+
+def append_outbox(result_msg):
+    """code-to-desktop.json'a sonuç/soru mesajı ekler (aynı task_id varsa günceller)."""
+    data = read_json_safe(CODE_TO_DESKTOP) or {'messages': []}
+    data['messages'] = [
+        m for m in data['messages']
+        if m.get('task_id') != result_msg.get('task_id')
+    ]
+    data['messages'].append(result_msg)
+    write_json_safe(CODE_TO_DESKTOP, data)
+
+
+# ── Watch görev işleyicileri ──────────────────────────────────────────────────
+
+def _extract_file_paths(changed):
+    """git status --short satırlarından saf yol listesi çıkarır."""
+    paths = []
+    for line in changed:
+        parts = line.strip().split()
+        if parts:
+            paths.append(parts[-1].strip('"').replace('\\', '/'))
+    return paths
+
+def handle_task(msg, pending_reviews):
+    """type='task' mesajını çalıştırır, sonucu outbox'a yazar."""
+    msg_id   = msg['id']
+    title    = msg.get('title', msg_id)
+    content  = msg.get('content', '')
+    plan     = msg.get('plan', '')
+
+    prompt = content
+    if plan:
+        prompt += f"\n\nUYGULAMA PLANI:\n{plan}"
+    prompt += "\n\nGörev tamamlanınca 'GÖREV TAMAMLANDI' yaz."
+
+    log(f"\n{W}[WATCH] Görev başlıyor: {title}{E}", W)
+    mark_inbox_status(msg_id, 'processing')
+
+    # pending_reviews'e kaydet (review_response geldiğinde kullanmak için)
+    pending_reviews[msg_id] = {'title': title, 'base_prompt': prompt, 'attempt': 0}
+
+    changed, commit_hash = _run_and_commit(msg_id, title, prompt)
+
+    if changed is None:
+        result = _make_result(msg_id, 'failed',
+                              summary='3 denemede dosya değişikliği sağlanamadı.',
+                              files=[], commit_hash=None,
+                              needs_review=False, questions=None)
+        append_outbox(result)
+        mark_inbox_status(msg_id, 'failed')
+        pending_reviews.pop(msg_id, None)
+        return
+
+    result = _make_result(msg_id, 'completed',
+                          summary=f"{title} tamamlandı. {len(changed)} dosya değişti.",
+                          files=changed, commit_hash=commit_hash,
+                          needs_review=False, questions=None)
+    append_outbox(result)
+    mark_inbox_status(msg_id, 'completed')
+    pending_reviews.pop(msg_id, None)
+    log(f"  {G}[WATCH] {title} → commit {commit_hash}{E}", G)
+
+
+def handle_review_response(msg, pending_reviews):
+    """type='review_response' — Desktop'un verdiği cevapla görevi sürdürür."""
+    msg_id       = msg['id']
+    task_id      = msg.get('task_id', '')
+    review_text  = msg.get('content', '')
+
+    mark_inbox_status(msg_id, 'processing')
+
+    ctx = pending_reviews.get(task_id)
+    if not ctx:
+        log(f"  [!] review_response için orijinal görev bulunamadı: {task_id}", R)
+        mark_inbox_status(msg_id, 'error')
+        return
+
+    title  = ctx['title']
+    prompt = ctx['base_prompt'] + f"\n\nDESKTOP CEVABI:\n{review_text}\n\nBu cevabı dikkate alarak devam et."
+    log(f"\n{W}[WATCH] Review cevabı alındı, görev sürdürülüyor: {title}{E}", W)
+
+    changed, commit_hash = _run_and_commit(task_id, title, prompt)
+
+    if changed is None:
+        result = _make_result(task_id, 'failed',
+                              summary='Review sonrası da dosya değişikliği sağlanamadı.',
+                              files=[], commit_hash=None,
+                              needs_review=False, questions=None)
+        append_outbox(result)
+        mark_inbox_status(msg_id, 'failed')
+        pending_reviews.pop(task_id, None)
+        return
+
+    result = _make_result(task_id, 'completed',
+                          summary=f"{title} review sonrası tamamlandı. {len(changed)} dosya.",
+                          files=changed, commit_hash=commit_hash,
+                          needs_review=False, questions=None)
+    append_outbox(result)
+    mark_inbox_status(msg_id, 'completed')
+    pending_reviews.pop(task_id, None)
+    log(f"  {G}[WATCH] {title} review sonrası tamamlandı → {commit_hash}{E}", G)
+
+
+def handle_approve(msg):
+    """type='approve' — bekleyen staged değişiklikleri commit eder."""
+    msg_id  = msg['id']
+    task_id = msg.get('task_id', '')
+    title   = msg.get('title', task_id)
+
+    mark_inbox_status(msg_id, 'processing')
+    log(f"\n{W}[WATCH] Onay alındı, commit atılıyor: {title}{E}", W)
+
+    changed = git_changed_files()
+    if not changed:
+        log(f"  ~ Onay için commit edilecek değişiklik yok", Y)
+        mark_inbox_status(msg_id, 'completed')
+        return
+
+    git_commit(f"feat: {title} (onaylandı)")
+    commit_hash = get_last_commit_hash()
+
+    result = _make_result(task_id, 'completed',
+                          summary=f"Onay ile commit atıldı: {title}",
+                          files=_extract_file_paths(changed),
+                          commit_hash=commit_hash,
+                          needs_review=False, questions=None)
+    append_outbox(result)
+    mark_inbox_status(msg_id, 'completed')
+    log(f"  {G}[WATCH] Commit OK → {commit_hash}{E}", G)
+
+
+# ── Ortak yardımcılar ─────────────────────────────────────────────────────────
+
+def _run_and_commit(task_id, title, prompt):
+    """CLI çalıştır + dosya değişikliği kontrolü + auto-migrate + commit.
+    Başarıda (file_paths, commit_hash), başarısızlıkta (None, None) döner."""
+    for attempt in range(1, 4):
+        if attempt > 1:
+            log(f"  ~> Deneme {attempt}/3...", Y)
+            time.sleep(8)
+            prompt += (
+                f"\n\nÖNEMLİ (deneme {attempt}): Önceki denemede dosya değişikliği tespit edilmedi. "
+                "Write/Edit araçlarını MUTLAKA kullan."
+            )
+
+        ok = run_with_cli(task_id, prompt, attempt)
+        if not ok:
+            log(f"  [!] CLI başarısız (deneme {attempt})", R)
+            continue
+
+        changed_raw = git_changed_files()
+        if not changed_raw:
+            log(f"  [!] Değişiklik yok (deneme {attempt})", R)
+            continue
+
+        log(f"  [+] {len(changed_raw)} dosya değişti:", G)
+        for f in changed_raw[:8]:
+            log(f"      {f}", C)
+
+        # SQL dosyası varsa auto-migrate
+        paths = _extract_file_paths(changed_raw)
+        if any(p.endswith('.sql') for p in paths):
+            time.sleep(2)
+            run_migration()
+
+        if git_commit(f"feat: {title}"):
+            return paths, get_last_commit_hash()
+
+    return None, None
+
+
+def _make_result(task_id, status, summary, files, commit_hash, needs_review, questions):
+    return {
+        "id": f"res-{task_id}-{datetime.now().strftime('%H%M%S')}",
+        "task_id": task_id,
+        "type": "result",
+        "status": status,
+        "summary": summary,
+        "files_changed": files,
+        "commit_hash": commit_hash,
+        "needs_review": needs_review,
+        "questions": questions,
+        "created_at": datetime.now().isoformat(),
+    }
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# WATCH DÖNGÜSÜ
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+def watch_loop():
+    log(f"\n{W}{C}  GD360 Orchestrator — WATCH MODE{E}")
+    log(f"{C}  desktop-to-code.json izleniyor (her {WATCH_INTERVAL}s){E}")
+    log(f"{Y}  Ctrl+C ile durdur{E}\n")
+
+    # Dosyalar yoksa oluştur
+    if not DESKTOP_TO_CODE.exists():
+        write_json_safe(DESKTOP_TO_CODE, {"messages": []})
+        log(f"  [+] Oluşturuldu: {DESKTOP_TO_CODE.name}", G)
+    if not CODE_TO_DESKTOP.exists():
+        write_json_safe(CODE_TO_DESKTOP, {"messages": []})
+        log(f"  [+] Oluşturuldu: {CODE_TO_DESKTOP.name}", G)
+
+    pending_reviews = {}  # task_id → {title, base_prompt}
+    tick = 0
+
+    while True:
+        try:
+            msg = get_pending_message()
+
+            if msg:
+                msg_type = msg.get('type', 'task')
+                log(f"\n{W}[WATCH] Mesaj alındı: {msg['id']}  type={msg_type}{E}", W)
+
+                if msg_type == 'task':
+                    handle_task(msg, pending_reviews)
+                elif msg_type == 'review_response':
+                    handle_review_response(msg, pending_reviews)
+                elif msg_type == 'approve':
+                    handle_approve(msg)
+                else:
+                    log(f"  [!] Bilinmeyen mesaj tipi: {msg_type}", R)
+                    mark_inbox_status(msg['id'], 'error')
+            else:
+                # Her 60 saniyede bir "bekliyorum" mesajı
+                if tick % (60 // WATCH_INTERVAL) == 0:
+                    log(f"  [{ts()}] Bekliyor... (pending mesaj yok)", B)
+                tick += 1
+                time.sleep(WATCH_INTERVAL)
+
+        except KeyboardInterrupt:
+            log(f"\n{Y}[WATCH] Durduruldu.{E}", Y)
+            break
+        except Exception as e:
+            log(f"  [!] Watch loop hatası: {type(e).__name__}: {e}", R)
+            time.sleep(WATCH_INTERVAL)
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -576,6 +859,7 @@ def main():
     args = sys.argv[1:]
     test_mode   = '--test'   in args
     status_mode = '--status' in args
+    watch_mode  = '--watch'  in args
     start_from  = None
     if '--from' in args:
         idx = args.index('--from')
@@ -590,6 +874,11 @@ def main():
 
     if status_mode:
         print_status(TASKS, ckpt)
+        return
+
+    if watch_mode:
+        check_docker()
+        watch_loop()
         return
 
     check_docker()
