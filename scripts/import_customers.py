@@ -382,8 +382,17 @@ def import_row(
     lang        = extract_language(dil)
     end_sugg    = extract_end_customer_suggestion(aciklama)
 
-    # ── historical_quotes_raw: skip if ref_no already exists ─────────────────
-    existing_raw_id = ref_exists(cur, ref_no) if ref_no else None
+    # ── historical_quotes_raw: idempotency check ─────────────────────────────
+    # Primary key: ref_no. Fallback for empty ref_no: (musteri, tarih).
+    if ref_no:
+        existing_raw_id = ref_exists(cur, ref_no)
+    else:
+        cur.execute(
+            "SELECT id FROM historical_quotes_raw WHERE ref_no IS NULL AND musteri = %s AND tarih = %s LIMIT 1",
+            (musteri, tarih),
+        )
+        row = cur.fetchone()
+        existing_raw_id = str(row["id"]) if row else None
     if existing_raw_id:
         raw_id = existing_raw_id
         stats["raw_skipped"] += 1
