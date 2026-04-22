@@ -12,9 +12,10 @@ const CUSTOMER_TYPE_COLORS = {
 };
 
 const STATUS_COLORS = {
-  active:      'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30',
-  passive:     'bg-amber-500/20 text-amber-300 border border-amber-500/30',
-  blacklisted: 'bg-red-500/20 text-red-300 border border-red-500/30',
+  active:       'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30',
+  passive:      'bg-amber-500/20 text-amber-300 border border-amber-500/30',
+  blacklisted:  'bg-red-500/20 text-red-300 border border-red-500/30',
+  unidentified: 'bg-orange-500/20 text-orange-300 border border-orange-500/30',
 };
 
 const STAGE_COLORS = {
@@ -358,7 +359,7 @@ function CompanyInfoForm({ customer, salespeople, canEdit, onSaved, t }) {
             {editing ? (
               <select className="input w-full text-sm" value={form.status || ''} onChange={e => setF('status', e.target.value)}>
                 <option value="">—</option>
-                {['active','passive','blacklisted'].map(s => (
+                {['active','passive','blacklisted','unidentified'].map(s => (
                   <option key={s} value={s}>{t(`crm.statuses.${s}`)}</option>
                 ))}
               </select>

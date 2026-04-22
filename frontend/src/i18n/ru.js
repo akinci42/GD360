@@ -96,7 +96,7 @@ export default {
       channels: { distributor: 'Дистрибьютор', direct: 'Прямой', broker: 'Брокер', office: 'Представительство' },
       customerTypes: { partner: 'Партнёр', direct: 'Прямой', end_customer: 'Конечный клиент' },
       partnerSubtypes: { distributor: 'Дистрибьютор', regional_office: 'Региональный офис' },
-      statuses: { active: 'Активный', passive: 'Пассивный', blacklisted: 'Чёрный список' },
+      statuses: { active: 'Активный', passive: 'Пассивный', blacklisted: 'Чёрный список', unidentified: 'Неопознанный' },
       kpi: { totalProjects: 'Всего проектов', revenue: 'Выручка (выиграно)', activeOffers: 'Активных предложений', lastContact: 'Последний контакт' },
       actions: { whatsapp: 'WhatsApp', email: 'Эл. почта', call: 'Звонок', newOffer: '+ Предложение' },
       contacts: {

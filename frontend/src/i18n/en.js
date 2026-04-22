@@ -96,7 +96,7 @@ export default {
       channels: { distributor: 'Distributor', direct: 'Direct', broker: 'Broker', office: 'Office' },
       customerTypes: { partner: 'Partner', direct: 'Direct', end_customer: 'End Customer' },
       partnerSubtypes: { distributor: 'Distributor', regional_office: 'Regional Office' },
-      statuses: { active: 'Active', passive: 'Passive', blacklisted: 'Blacklisted' },
+      statuses: { active: 'Active', passive: 'Passive', blacklisted: 'Blacklisted', unidentified: 'Unidentified' },
       kpi: { totalProjects: 'Total Projects', revenue: 'Revenue (Won)', activeOffers: 'Active Offers', lastContact: 'Last Contact' },
       actions: { whatsapp: 'WhatsApp', email: 'Email', call: 'Call', newOffer: '+ New Offer' },
       contacts: {

@@ -96,7 +96,7 @@ export default {
       channels: { distributor: 'Distribütör', direct: 'Direkt', broker: 'Broker', office: 'Temsilcilik' },
       customerTypes: { partner: 'Partner', direct: 'Doğrudan', end_customer: 'Son Müşteri' },
       partnerSubtypes: { distributor: 'Distribütör', regional_office: 'Bölge Ofisi' },
-      statuses: { active: 'Aktif', passive: 'Pasif', blacklisted: 'Kara Liste' },
+      statuses: { active: 'Aktif', passive: 'Pasif', blacklisted: 'Kara Liste', unidentified: 'Kimliği Belirsiz' },
       kpi: { totalProjects: 'Toplam Proje', revenue: 'Ciro (Kazanılan)', activeOffers: 'Aktif Teklif', lastContact: 'Son İletişim' },
       actions: { whatsapp: 'WhatsApp', email: 'E-posta', call: 'Ara', newOffer: '+ Teklif Ver' },
       contacts: {

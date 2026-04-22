@@ -96,7 +96,7 @@ export default {
       channels: { distributor: 'موزع', direct: 'مباشر', broker: 'وسيط', office: 'مكتب تمثيل' },
       customerTypes: { partner: 'شريك', direct: 'مباشر', end_customer: 'العميل النهائي' },
       partnerSubtypes: { distributor: 'موزع', regional_office: 'مكتب إقليمي' },
-      statuses: { active: 'نشط', passive: 'غير نشط', blacklisted: 'قائمة سوداء' },
+      statuses: { active: 'نشط', passive: 'غير نشط', blacklisted: 'قائمة سوداء', unidentified: 'غير محدد' },
       kpi: { totalProjects: 'إجمالي المشاريع', revenue: 'الإيرادات (المكتسبة)', activeOffers: 'العروض النشطة', lastContact: 'آخر تواصل' },
       actions: { whatsapp: 'واتساب', email: 'بريد إلكتروني', call: 'اتصال', newOffer: '+ عرض جديد' },
       contacts: {

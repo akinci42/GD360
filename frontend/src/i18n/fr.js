@@ -96,7 +96,7 @@ export default {
       channels: { distributor: 'Distributeur', direct: 'Direct', broker: 'Courtier', office: 'Bureau de représentation' },
       customerTypes: { partner: 'Partenaire', direct: 'Direct', end_customer: 'Client final' },
       partnerSubtypes: { distributor: 'Distributeur', regional_office: 'Bureau régional' },
-      statuses: { active: 'Actif', passive: 'Passif', blacklisted: 'Liste noire' },
+      statuses: { active: 'Actif', passive: 'Passif', blacklisted: 'Liste noire', unidentified: 'Non identifié' },
       kpi: { totalProjects: 'Total projets', revenue: 'Chiffre d\'affaires (gagné)', activeOffers: 'Offres actives', lastContact: 'Dernier contact' },
       actions: { whatsapp: 'WhatsApp', email: 'E-mail', call: 'Appeler', newOffer: '+ Offre' },
       contacts: {

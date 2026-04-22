@@ -17,9 +17,10 @@ const SUBTYPE_COLORS = {
 };
 
 const STATUS_COLORS = {
-  active:      'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30',
-  passive:     'bg-amber-500/20 text-amber-300 border border-amber-500/30',
-  blacklisted: 'bg-red-500/20 text-red-300 border border-red-500/30',
+  active:       'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30',
+  passive:      'bg-amber-500/20 text-amber-300 border border-amber-500/30',
+  blacklisted:  'bg-red-500/20 text-red-300 border border-red-500/30',
+  unidentified: 'bg-orange-500/20 text-orange-300 border border-orange-500/30',
 };
 
 function CustomerTypeBadge({ type, subtype, t }) {
@@ -414,10 +415,10 @@ export default function CrmPage() {
             </select>
           )}
           {/* Status */}
-          <select className="input w-40" value={filterStatus}
+          <select className="input w-44" value={filterStatus}
             onChange={e => setParam('status', e.target.value)}>
             <option value="">{t('crm.allStatuses')}</option>
-            {['active','passive','blacklisted'].map(v => (
+            {['active','passive','blacklisted','unidentified'].map(v => (
               <option key={v} value={v}>{t(`crm.statuses.${v}`)}</option>
             ))}
           </select>
