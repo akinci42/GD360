@@ -140,23 +140,42 @@ TR_COUNTRY_TO_ISO: dict[str, str] = {
 
 # Sales rep assignment: ISO country code → email prefix
 ULKE_TO_REP: dict[str, str] = {
+    # Orhan: domestic Turkey
     "TR": "orhan",
-    # Sinan: MENA / North Africa
-    "SA": "sinan", "AE": "sinan", "QA": "sinan", "KW": "sinan",
-    "BH": "sinan", "OM": "sinan", "YE": "sinan", "IQ": "sinan",
-    "SY": "sinan", "JO": "sinan", "LB": "sinan", "PS": "sinan",
-    "EG": "sinan", "LY": "sinan", "TN": "sinan", "DZ": "sinan",
-    "MA": "sinan", "SD": "sinan", "SO": "sinan",
-    # Sanzhar: Central Asia / CIS
-    "KZ": "sanzhar", "UZ": "sanzhar", "KG": "sanzhar", "TJ": "sanzhar",
-    "TM": "sanzhar", "AZ": "sanzhar", "AM": "sanzhar", "GE": "sanzhar",
-    "RU": "sanzhar", "BY": "sanzhar", "UA": "sanzhar", "MD": "sanzhar",
-    # Ramazan: Sub-Saharan Africa + South Asia
-    "NG": "ramazan", "ET": "ramazan", "KE": "ramazan", "TZ": "ramazan",
-    "UG": "ramazan", "ZM": "ramazan", "ZW": "ramazan", "SN": "ramazan",
-    "GH": "ramazan", "CI": "ramazan", "CM": "ramazan",
-    "PK": "ramazan", "BD": "ramazan", "AF": "ramazan", "IN": "ramazan",
-    # Sami: Europe + Americas + other (fallback)
+    # Ramazan: CIS / former Soviet (main region)
+    "UZ": "ramazan", "KZ": "ramazan", "RU": "ramazan", "AZ": "ramazan",
+    "TJ": "ramazan", "UA": "ramazan", "GE": "ramazan", "AM": "ramazan",
+    "BY": "ramazan", "MD": "ramazan",
+    # Sanzhar: CIS support only (Kyrgyzstan + Turkmenistan)
+    "KG": "sanzhar", "TM": "sanzhar",
+    # Sami: MENA / Middle East / North Africa / Iran
+    "SA": "sami", "AE": "sami", "QA": "sami", "KW": "sami",
+    "BH": "sami", "OM": "sami", "YE": "sami", "IQ": "sami",
+    "SY": "sami", "JO": "sami", "LB": "sami", "PS": "sami",
+    "EG": "sami", "LY": "sami", "TN": "sami", "DZ": "sami",
+    "MA": "sami", "SD": "sami", "SO": "sami", "IR": "sami",
+    # Sinan: Sub-Saharan Africa + South Asia + Europe + Americas + other
+    "NG": "sinan", "ET": "sinan", "KE": "sinan", "TZ": "sinan",
+    "UG": "sinan", "ZM": "sinan", "ZW": "sinan", "SN": "sinan",
+    "GH": "sinan", "CI": "sinan", "CM": "sinan",
+    "PK": "sinan", "BD": "sinan", "AF": "sinan", "IN": "sinan", "LK": "sinan",
+    # Europe
+    "DE": "sinan", "FR": "sinan", "ES": "sinan", "IT": "sinan",
+    "NL": "sinan", "BE": "sinan", "SE": "sinan", "NO": "sinan",
+    "FI": "sinan", "DK": "sinan", "AT": "sinan", "CH": "sinan",
+    "CZ": "sinan", "HU": "sinan", "GR": "sinan", "RS": "sinan",
+    "HR": "sinan", "BA": "sinan", "AL": "sinan", "MK": "sinan",
+    "SI": "sinan", "SK": "sinan", "LT": "sinan", "LV": "sinan",
+    "EE": "sinan", "PT": "sinan", "GB": "sinan", "IE": "sinan",
+    "PL": "sinan", "BG": "sinan", "RO": "sinan",
+    # Americas
+    "US": "sinan", "CA": "sinan", "AR": "sinan", "BR": "sinan",
+    "CO": "sinan", "MX": "sinan",
+    # Asia Pacific + other
+    "AU": "sinan", "CN": "sinan", "JP": "sinan", "KR": "sinan",
+    "MY": "sinan", "ID": "sinan", "TH": "sinan", "PH": "sinan",
+    "VN": "sinan",
+    # Sami is the fallback for any remaining mapped country
 }
 
 # Channel type → (customer_type, partner_subtype)
@@ -291,9 +310,11 @@ def assign_rep(country_iso: str | None, company_name: str, use_haiku: bool) -> s
         rep = ULKE_TO_REP.get(country_iso)
         if rep:
             return rep
-    if use_haiku and country_iso:
-        return haiku_assign_rep(country_iso, company_name)
-    return "sami"
+        if use_haiku:
+            return haiku_assign_rep(country_iso, company_name)
+        return "sami"
+    # country_iso is None (Bilinmiyor) → coordinator reviews
+    return "ahmet"
 
 
 # ─── DB helpers ───────────────────────────────────────────────────────────────
@@ -564,13 +585,11 @@ def print_report(stats: dict, report: dict, elapsed: float, dry_run: bool, cur=N
     rc = report["rep_counter"]
     total_assigned = sum(rc.values())
     print(f"\n⑤ Sales rep dağılımı (toplam atanan: {total_assigned})")
-    for rep in ("orhan", "sinan", "sanzhar", "ramazan", "sami"):
+    for rep in ("orhan", "ramazan", "sanzhar", "sami", "sinan", "ahmet"):
         n = rc.get(rep, 0)
         pct = n / total_assigned * 100 if total_assigned else 0
-        print(f"   {rep:<10}: {n:>6}  ({pct:.1f}%)")
-    # ahmet fallback (shouldn't happen normally)
-    if rc.get("ahmet"):
-        print(f"   {'ahmet':<10}: {rc['ahmet']:>6}  (fallback)")
+        suffix = "  (Bilinmiyor → coordinator)" if rep == "ahmet" else ""
+        print(f"   {rep:<10}: {n:>6}  ({pct:.1f}%){suffix}")
 
     # 6. End-customer önerileri
     print(f"\n⑥ end_customer_suggestion bulunan : {stats['end_suggestions']:>6}")
