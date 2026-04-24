@@ -15,6 +15,7 @@ import FilesPage from './pages/FilesPage.jsx';
 import PerformansPage from './pages/PerformansPage.jsx';
 import MaliyetPage from './pages/MaliyetPage.jsx';
 import UstaBotPage from './pages/UstaBotPage.jsx';
+import DedupePage from './pages/DedupePage.jsx';
 
 function ProtectedRoute({ children }) {
   const token = useAuthStore(s => s.token);
@@ -47,6 +48,7 @@ export default function App() {
         <Route path="iletisim"     element={<IletisimBildirimlerPage />} />
         <Route path="maliyet"      element={<MaliyetPage />} />
         <Route path="yonetim"      element={<YonetimPaneliPage />} />
+        <Route path="yonetim/dedupe" element={<DedupePage />} />
         <Route path="ustabot"      element={<UstaBotPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />

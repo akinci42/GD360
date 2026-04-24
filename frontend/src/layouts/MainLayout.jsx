@@ -16,6 +16,7 @@ const NAV_ITEMS = [
   { key: 'iletisimBildirimler', path: '/iletisim', roles: ['owner', 'coordinator', 'sales', 'viewer'] },
   { key: 'maliyetMerkezi', path: '/maliyet',       roles: ['owner', 'coordinator'] },
   { key: 'yonetimPaneli',  path: '/yonetim',       roles: ['owner', 'coordinator'] },
+  { key: 'dedupe',         path: '/yonetim/dedupe', roles: ['owner', 'coordinator'] },
   { key: 'ustaBot',        path: '/ustabot',       roles: ['owner', 'coordinator', 'sales', 'viewer'] },
 ];
 
@@ -31,6 +32,7 @@ const ICONS = {
   iletisimBildirimler: '💬',
   maliyetMerkezi:  '💰',
   yonetimPaneli:   '🔐',
+  dedupe:          '🔀',
   ustaBot:         '🤖',
 };
 
