@@ -168,17 +168,19 @@ router.post('/:id/clone', requireRole('owner', 'coordinator', 'sales'), async (r
   try {
     const { rows: [src] } = await client.query('SELECT * FROM offers WHERE id = $1', [req.params.id]);
     if (!src) return res.status(404).json({ success: false, error: 'Offer not found' });
-    const { rows: srcItems } = await client.query('SELECT * FROM offer_items WHERE offer_id = $1 ORDER BY sort_order', [src.id]);
+    const { rows: srcItems } = await client.query(
+      'SELECT * FROM offer_items WHERE offer_id = $1 ORDER BY sort_order, id',
+      [src.id]
+    );
 
     await client.query('BEGIN');
-    const valid_until = src.validity_days
-      ? new Date(Date.now() + src.validity_days * 86400000).toISOString().slice(0, 10)
-      : null;
+    const validityDays = src.validity_days || 30;
+    const valid_until = new Date(Date.now() + validityDays * 86400000).toISOString().slice(0, 10);
 
     const { rows: [cloned] } = await client.query(
-      `INSERT INTO offers (offer_number, customer_id, opportunity_id, title, currency, validity_days, notes, valid_until, created_by)
-       VALUES ('', $1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
-      [src.customer_id, src.opportunity_id, `${src.title} (kopya)`, src.currency, src.validity_days, src.notes, valid_until, req.user.id]
+      `INSERT INTO offers (offer_number, customer_id, opportunity_id, title, status, currency, validity_days, notes, valid_until, created_by)
+       VALUES ('', $1, $2, $3, 'draft', $4, $5, $6, $7, $8) RETURNING id`,
+      [src.customer_id, src.opportunity_id, `${src.title} (kopya)`, src.currency, validityDays, src.notes, valid_until, req.user.id]
     );
     for (let i = 0; i < srcItems.length; i++) {
       const s = srcItems[i];
@@ -189,7 +191,20 @@ router.post('/:id/clone', requireRole('owner', 'coordinator', 'sales'), async (r
       );
     }
     await client.query('COMMIT');
-    res.status(201).json({ success: true, data: cloned });
+
+    const { rows: [full] } = await client.query(
+      `SELECT o.*, c.company_name, u.full_name AS created_by_name
+       FROM offers o
+       JOIN customers c ON c.id = o.customer_id
+       LEFT JOIN users u ON u.id = o.created_by
+       WHERE o.id = $1`,
+      [cloned.id]
+    );
+    const { rows: clonedItems } = await client.query(
+      `SELECT * FROM offer_items WHERE offer_id = $1 ORDER BY sort_order, id`,
+      [cloned.id]
+    );
+    res.status(201).json({ success: true, data: { ...full, items: clonedItems } });
   } catch (err) { await client.query('ROLLBACK'); next(err); } finally { client.release(); }
 });
 
