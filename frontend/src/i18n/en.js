@@ -126,6 +126,11 @@ export default {
       noGroups: 'No groups',
       parentCompany: 'Parent Company',
       openCustomer: 'Open',
+      quickEdit: 'Quick Edit',
+      markPassive: 'Mark Passive',
+      openDetail: 'Open Detail Page',
+      rowActions: 'Actions',
+      confirmDelete: 'Are you sure you want to delete this customer?',
     },
     dashboard: {
       welcome: 'Welcome',

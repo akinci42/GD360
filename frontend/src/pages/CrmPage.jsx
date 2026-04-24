@@ -2,7 +2,98 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore.js';
+import QuickEditCustomerModal from '../components/QuickEditCustomerModal.jsx';
 import api from '../utils/api.js';
+
+const DEFAULT_SORT = 'last_activity_desc';
+const DEFAULT_SORT_DIR = { company_name: 'asc', country: 'asc', last_activity: 'desc' };
+
+function SortableHeader({ col, label, sort, onToggle }) {
+  const active = sort.startsWith(col + '_');
+  const dir = active ? sort.split('_').pop() : null;
+  const icon = !active ? '↕' : dir === 'asc' ? '↑' : '↓';
+  return (
+    <th className="text-left px-4 py-3">
+      <button
+        type="button"
+        onClick={() => onToggle(col)}
+        className={`flex items-center gap-1.5 font-medium transition-colors ${active ? 'text-slate-100' : 'text-slate-400 hover:text-slate-200'}`}
+      >
+        {label}
+        <span className={active ? 'text-brand-400' : 'text-slate-600'}>{icon}</span>
+      </button>
+    </th>
+  );
+}
+
+function RowActionsMenu({ customer, isOpen, onOpen, onClose, onEdit, onOpenDetail, onMarkPassive, onDelete, canDelete, t }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!isOpen) return;
+    function handle(e) { if (ref.current && !ref.current.contains(e.target)) onClose(); }
+    document.addEventListener('mousedown', handle);
+    return () => document.removeEventListener('mousedown', handle);
+  }, [isOpen, onClose]);
+
+  return (
+    <div className="relative inline-block" ref={ref} onClick={e => e.stopPropagation()}>
+      <button
+        type="button"
+        onClick={e => { e.stopPropagation(); isOpen ? onClose() : onOpen(); }}
+        className="text-slate-500 hover:text-slate-200 px-2 py-1 rounded-md hover:bg-dark-700/60 transition-colors"
+        aria-label={t('crm.rowActions')}
+        title={t('crm.rowActions')}
+      >
+        ⋮
+      </button>
+      {isOpen && (
+        <div className="absolute right-0 top-full mt-1 w-52 bg-dark-800 border border-dark-600 rounded-lg shadow-xl z-20 py-1">
+          <button onClick={onEdit} className="w-full text-left px-3 py-2 text-sm text-slate-200 hover:bg-dark-700/60 transition-colors">
+            ✎ {t('crm.quickEdit')}
+          </button>
+          <button onClick={onOpenDetail} className="w-full text-left px-3 py-2 text-sm text-slate-200 hover:bg-dark-700/60 transition-colors">
+            › {t('crm.openDetail')}
+          </button>
+          <div className="border-t border-dark-700 my-1" />
+          {customer.status !== 'passive' && (
+            <button onClick={onMarkPassive} className="w-full text-left px-3 py-2 text-sm text-amber-400 hover:bg-dark-700/60 transition-colors">
+              {t('crm.markPassive')}
+            </button>
+          )}
+          {canDelete && (
+            <button onClick={onDelete} className="w-full text-left px-3 py-2 text-sm text-red-400 hover:bg-dark-700/60 transition-colors">
+              {t('common.delete')}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DeleteConfirmModal({ customer, onCancel, onConfirm, t, confirming }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm px-4">
+      <div className="bg-dark-800 border border-dark-600 rounded-xl shadow-2xl w-[400px] max-w-full p-5">
+        <h3 className="text-sm font-semibold text-slate-100 mb-2">{t('crm.deleteCustomer')}</h3>
+        <p className="text-sm text-slate-400 mb-4">
+          {t('crm.confirmDelete')}
+          <br />
+          <span className="text-slate-200 font-medium">{customer.company_name}</span>
+        </p>
+        <div className="flex gap-3">
+          <button onClick={onConfirm} disabled={confirming}
+            className="btn-primary bg-red-600 hover:bg-red-500 flex-1 text-sm">
+            {confirming ? t('common.loading') : t('common.delete')}
+          </button>
+          <button onClick={onCancel} className="btn-secondary flex-1 text-sm">
+            {t('common.cancel')}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 // ─── Badge helpers ────────────────────────────────────────────────────────────
 const CUSTOMER_TYPE_COLORS = {
@@ -296,6 +387,10 @@ export default function CrmPage() {
   const [showModal,      setShowModal]      = useState(false);
   const [toast,          setToast]          = useState('');
   const [filterOptions,  setFilterOptions]  = useState({ countries: [], salespeople: [] });
+  const [editingCustomer,  setEditingCustomer]  = useState(null);
+  const [deletingCustomer, setDeletingCustomer] = useState(null);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [openMenuId,       setOpenMenuId]       = useState(null);
   // searchInput is the controlled input value; URL param drives the API
   const [searchInput, setSearchInput] = useState(searchParams.get('search') || '');
   const searchTimer = useRef(null);
@@ -308,6 +403,18 @@ export default function CrmPage() {
   const filterSubtype  = searchParams.get('partner_subtype')|| '';
   const filterStatus   = searchParams.get('status')         || '';
   const filterAssigned = searchParams.get('assigned_to')    || '';
+  const sort           = searchParams.get('sort')           || DEFAULT_SORT;
+
+  function toggleSort(col) {
+    let next;
+    if (sort === `${col}_asc`)       next = `${col}_desc`;
+    else if (sort === `${col}_desc`) next = `${col}_asc`;
+    else                             next = `${col}_${DEFAULT_SORT_DIR[col] || 'asc'}`;
+    // Keep URL clean when reverting to default
+    setParam('sort', next === DEFAULT_SORT ? '' : next);
+  }
+
+  const canDelete = ['owner', 'coordinator'].includes(currentUser?.role);
 
   function setParam(key, value) {
     setSearchParams(prev => {
@@ -347,13 +454,42 @@ export default function CrmPage() {
       if (filterSubtype)  params.partner_subtype = filterSubtype;
       if (filterStatus)   params.status          = filterStatus;
       if (filterAssigned) params.assigned_to     = filterAssigned;
+      if (sort)           params.sort            = sort;
       const r = await api.get('/customers', { params });
       setCustomers(r.data.data);
       setTotal(r.data.total);
       setPage(pg);
     } catch { /* interceptor */ }
     finally { setLoading(false); }
-  }, [search, filterCountry, filterType, filterSubtype, filterStatus, filterAssigned]);
+  }, [search, filterCountry, filterType, filterSubtype, filterStatus, filterAssigned, sort]);
+
+  async function handleQuickEditSaved(updated) {
+    setEditingCustomer(null);
+    setCustomers(cs => cs.map(c => c.id === updated.id ? { ...c, ...updated } : c));
+    setToast(t('crm.toast.saved'));
+  }
+
+  async function handleMarkPassive(customer) {
+    setOpenMenuId(null);
+    try {
+      const { data: { data: updated } } = await api.patch(`/customers/${customer.id}`, { status: 'passive' });
+      setCustomers(cs => cs.map(c => c.id === updated.id ? { ...c, ...updated } : c));
+      setToast(t('crm.toast.saved'));
+    } catch { /* interceptor */ }
+  }
+
+  async function handleConfirmDelete() {
+    if (!deletingCustomer) return;
+    setConfirmingDelete(true);
+    try {
+      await api.delete(`/customers/${deletingCustomer.id}`);
+      setCustomers(cs => cs.filter(c => c.id !== deletingCustomer.id));
+      setTotal(n => Math.max(0, n - 1));
+      setToast(t('crm.toast.deleted'));
+      setDeletingCustomer(null);
+    } catch { /* interceptor */ }
+    finally { setConfirmingDelete(false); }
+  }
 
   useEffect(() => { load(1); }, [load]);
 
@@ -444,14 +580,14 @@ export default function CrmPage() {
         <table className="w-full text-sm min-w-[960px]">
           <thead>
             <tr className="border-b border-dark-700">
-              <th className="text-left px-4 py-3 text-slate-400 font-medium">Firma</th>
-              <th className="text-left px-4 py-3 text-slate-400 font-medium">{t('crm.location')}</th>
+              <SortableHeader col="company_name"  label="Firma"                   sort={sort} onToggle={toggleSort} />
+              <SortableHeader col="country"       label={t('crm.location')}       sort={sort} onToggle={toggleSort} />
               <th className="text-left px-4 py-3 text-slate-400 font-medium">{t('crm.customerType')}</th>
               <th className="text-left px-4 py-3 text-slate-400 font-medium">{t('crm.status')}</th>
               <th className="text-left px-4 py-3 text-slate-400 font-medium">Yetkili Kişi</th>
               <th className="text-left px-4 py-3 text-slate-400 font-medium">{t('crm.assignedTo')}</th>
-              <th className="text-left px-4 py-3 text-slate-400 font-medium">{t('crm.lastActivity')}</th>
-              <th className="w-8 px-2"></th>
+              <SortableHeader col="last_activity" label={t('crm.lastActivity')}   sort={sort} onToggle={toggleSort} />
+              <th className="w-10 px-2"></th>
             </tr>
           </thead>
           <tbody>
@@ -505,7 +641,20 @@ export default function CrmPage() {
                     ? fmtDate(c.last_activity_at)
                     : <span className="italic text-slate-600">{t('crm.noActivity')}</span>}
                 </td>
-                <td className="px-2 py-3 text-slate-600 group-hover:text-brand-400 transition-colors text-base">›</td>
+                <td className="px-2 py-3 text-right" onClick={e => e.stopPropagation()}>
+                  <RowActionsMenu
+                    customer={c}
+                    isOpen={openMenuId === c.id}
+                    onOpen={() => setOpenMenuId(c.id)}
+                    onClose={() => setOpenMenuId(null)}
+                    onEdit={() => { setOpenMenuId(null); setEditingCustomer(c); }}
+                    onOpenDetail={() => { setOpenMenuId(null); navigate(`/crm/${c.id}`); }}
+                    onMarkPassive={() => handleMarkPassive(c)}
+                    onDelete={() => { setOpenMenuId(null); setDeletingCustomer(c); }}
+                    canDelete={canDelete}
+                    t={t}
+                  />
+                </td>
               </tr>
             ))}
           </tbody>
@@ -541,6 +690,26 @@ export default function CrmPage() {
           onCreated={customer => { setShowModal(false); setToast(t('crm.toast.saved')); navigate(`/crm/${customer.id}`); }}
           salespeople={filterOptions.salespeople}
           currentUser={currentUser}
+        />
+      )}
+
+      {editingCustomer && (
+        <QuickEditCustomerModal
+          customer={editingCustomer}
+          salespeople={filterOptions.salespeople}
+          currentUser={currentUser}
+          onClose={() => setEditingCustomer(null)}
+          onSaved={handleQuickEditSaved}
+        />
+      )}
+
+      {deletingCustomer && (
+        <DeleteConfirmModal
+          customer={deletingCustomer}
+          confirming={confirmingDelete}
+          onCancel={() => setDeletingCustomer(null)}
+          onConfirm={handleConfirmDelete}
+          t={t}
         />
       )}
 

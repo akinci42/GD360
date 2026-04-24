@@ -126,6 +126,11 @@ export default {
       noGroups: 'Нет групп',
       parentCompany: 'Материнская компания',
       openCustomer: 'Открыть',
+      quickEdit: 'Быстрое редактирование',
+      markPassive: 'Сделать неактивным',
+      openDetail: 'Открыть страницу деталей',
+      rowActions: 'Действия',
+      confirmDelete: 'Вы уверены, что хотите удалить этого клиента?',
     },
     dashboard: {
       welcome: 'Добро пожаловать',

@@ -5,7 +5,9 @@ import { getRlsClient } from '../db/rls.js';
 const router = Router();
 router.use(authenticate);
 
-// ─── Validation helper ────────────────────────────────────────────────────────
+// ─── Validation helpers ───────────────────────────────────────────────────────
+const VALID_STATUSES = ['active', 'passive', 'blacklisted', 'unidentified'];
+
 function validateCustomerType(body) {
   const { customer_type, partner_subtype, parent_id } = body;
   if (customer_type === undefined) return null;
@@ -24,6 +26,21 @@ function validateCustomerType(body) {
   return null;
 }
 
+// Sort whitelist — invalid values silently fall back to default (last_activity_desc)
+const SORT_WHITELIST = {
+  company_name_asc:   'c.company_name COLLATE "tr-TR-x-icu" ASC',
+  company_name_desc:  'c.company_name COLLATE "tr-TR-x-icu" DESC',
+  country_asc:        'c.country ASC NULLS LAST',
+  country_desc:       'c.country DESC NULLS LAST',
+  last_activity_desc: '(SELECT MAX(created_at) FROM opportunities WHERE customer_id = c.id) DESC NULLS LAST',
+  last_activity_asc:  '(SELECT MAX(created_at) FROM opportunities WHERE customer_id = c.id) ASC  NULLS LAST',
+  created_at_desc:    'c.created_at DESC',
+  created_at_asc:     'c.created_at ASC',
+  quote_count_desc:   '(SELECT COUNT(*) FROM historical_quotes_raw WHERE customer_id = c.id) DESC',
+  quote_count_asc:    '(SELECT COUNT(*) FROM historical_quotes_raw WHERE customer_id = c.id) ASC',
+};
+const DEFAULT_SORT = 'last_activity_desc';
+
 // ─── GET /api/v1/customers ────────────────────────────────────────────────────
 router.get('/', async (req, res, next) => {
   const client = await getRlsClient(req.user);
@@ -34,7 +51,10 @@ router.get('/', async (req, res, next) => {
       channel_type,      // legacy — maps to customer_type for backwards compat
       customer_type, partner_subtype, status,
       assigned_to,
+      sort,
     } = req.query;
+    const sortKey    = SORT_WHITELIST[sort] ? sort : DEFAULT_SORT;
+    const orderByExpr = SORT_WHITELIST[sortKey];
     const offset = (parseInt(page) - 1) * parseInt(limit);
     const params = [];
     const conditions = [];
@@ -82,7 +102,7 @@ router.get('/', async (req, res, next) => {
       LEFT JOIN users     u ON u.id = c.assigned_to
       LEFT JOIN customers p ON p.id = c.parent_id
       ${where}
-      ORDER BY c.updated_at DESC
+      ORDER BY ${orderByExpr}
       LIMIT $${params.length - 1} OFFSET $${params.length}
     `;
     const { rows } = await client.query(sql, params);
@@ -266,6 +286,13 @@ router.post('/', requireRole('owner', 'coordinator', 'sales'), async (req, res, 
 router.patch('/:id', requireRole('owner', 'coordinator', 'sales'), async (req, res, next) => {
   const client = await getRlsClient(req.user);
   try {
+    if (req.body.company_name !== undefined && !String(req.body.company_name).trim()) {
+      return res.status(400).json({ success: false, error: 'company_name cannot be empty' });
+    }
+    if (req.body.status !== undefined && !VALID_STATUSES.includes(req.body.status)) {
+      return res.status(400).json({ success: false, error: `status must be one of: ${VALID_STATUSES.join(', ')}` });
+    }
+
     // Validate type rules if any type fields are being changed
     if (req.body.customer_type !== undefined || req.body.partner_subtype !== undefined || req.body.parent_id !== undefined) {
       // Fetch current values to merge with incoming changes

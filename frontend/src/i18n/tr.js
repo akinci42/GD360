@@ -126,6 +126,11 @@ export default {
       noGroups: 'Grup yok',
       parentCompany: 'Üst Şirket',
       openCustomer: 'Aç',
+      quickEdit: 'Hızlı Düzenle',
+      markPassive: 'Pasif Yap',
+      openDetail: 'Detay Sayfasına Git',
+      rowActions: 'İşlemler',
+      confirmDelete: 'Bu müşteriyi silmek istediğinize emin misiniz?',
     },
     dashboard: {
       welcome: 'Hoş geldiniz',

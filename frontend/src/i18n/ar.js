@@ -126,6 +126,11 @@ export default {
       noGroups: 'لا توجد مجموعات',
       parentCompany: 'الشركة الأم',
       openCustomer: 'فتح',
+      quickEdit: 'تعديل سريع',
+      markPassive: 'جعل سلبي',
+      openDetail: 'فتح صفحة التفاصيل',
+      rowActions: 'إجراءات',
+      confirmDelete: 'هل أنت متأكد من حذف هذا العميل؟',
     },
     dashboard: {
       welcome: 'مرحباً',
