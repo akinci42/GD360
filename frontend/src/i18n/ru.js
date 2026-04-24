@@ -158,6 +158,8 @@ export default {
         keyboardHint: 'Клавиши: A = выбрать A как главный · B = выбрать B · Space = объединить · X = оставить отдельно',
         confirmMerge: 'Запись {{other}} будет удалена и перенесена под {{master}}. Вы уверены?',
         confirmMergeTitle: 'Подтвердить объединение',
+        mergedAway: 'объединен с',
+        deletedAfterMerge: 'Этот клиент был удалён при объединении',
         toast: { merged: 'Объединено', rejected: 'Отклонено' },
       },
     },

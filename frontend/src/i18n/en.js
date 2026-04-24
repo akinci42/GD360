@@ -158,6 +158,8 @@ export default {
         keyboardHint: 'Keys: A = pick A as master · B = pick B · Space = merge · X = keep separate',
         confirmMerge: '{{other}} will be deleted and moved under {{master}}. Are you sure?',
         confirmMergeTitle: 'Confirm Merge',
+        mergedAway: 'merged into',
+        deletedAfterMerge: 'This customer was deleted during merge',
         toast: { merged: 'Merged', rejected: 'Rejected' },
       },
     },

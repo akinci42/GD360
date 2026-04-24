@@ -158,6 +158,8 @@ export default {
         keyboardHint: 'Touches : A = choisir A comme maître · B = choisir B · Espace = fusionner · X = garder séparé',
         confirmMerge: '{{other}} sera supprimé et déplacé sous {{master}}. Êtes-vous sûr ?',
         confirmMergeTitle: 'Confirmer la fusion',
+        mergedAway: 'fusionné avec',
+        deletedAfterMerge: 'Ce client a été supprimé lors de la fusion',
         toast: { merged: 'Fusionné', rejected: 'Rejeté' },
       },
     },

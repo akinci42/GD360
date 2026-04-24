@@ -158,6 +158,8 @@ export default {
         keyboardHint: 'Klavye: A = A’yı master seç · B = B’yi master seç · Space = birleştir · X = ayrı tut',
         confirmMerge: '{{other}} kaydı silinecek ve {{master}} altına taşınacak. Emin misiniz?',
         confirmMergeTitle: 'Birleştirmeyi Onayla',
+        mergedAway: 'birleştirildi',
+        deletedAfterMerge: 'Bu müşteri birleştirme sırasında silindi',
         toast: { merged: 'Birleştirildi', rejected: 'Reddedildi' },
       },
     },

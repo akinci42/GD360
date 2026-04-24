@@ -25,7 +25,19 @@ function StatsRow({ stats, t }) {
 
 // ─── Customer side panel inside a pair card ───────────────────────────────────
 function CustomerSide({ customer, side, isMaster, isFocusedCard, onPick, t }) {
-  if (!customer) return <div className="flex-1 p-4 text-slate-500 italic">—</div>;
+  if (customer === null || customer === undefined) {
+    return (
+      <div className="flex-1 bg-dark-800/30 border border-dashed border-dark-600 rounded-lg p-3 opacity-60">
+        <div className="flex items-center justify-between mb-1.5">
+          <span className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">{side}</span>
+          <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-600/20 text-slate-400 border border-slate-500/30 font-semibold italic">
+            ({t('crm.dedupe.mergedAway')})
+          </span>
+        </div>
+        <p className="text-xs text-slate-500 italic">{t('crm.dedupe.deletedAfterMerge')}</p>
+      </div>
+    );
+  }
   const quoteCount = parseInt(customer.quote_count ?? 0);
   const lastQuote = customer.last_quote_date;
   const ring = isMaster ? 'ring-2 ring-emerald-500 border-emerald-500/50' : 'border-dark-600';
@@ -190,12 +202,14 @@ export default function DedupePage() {
 
   const cardRefs = useRef([]);
 
-  async function loadStats() {
+  const loadStats = useCallback(async () => {
     try {
-      const r = await api.get('/dedupe/stats');
+      const params = { min_score: minScore };
+      if (search.trim()) params.search = search.trim();
+      const r = await api.get('/dedupe/stats', { params });
       setStats(r.data.data);
     } catch { /* ignore */ }
-  }
+  }, [minScore, search]);
 
   const loadItems = useCallback(async () => {
     setLoading(true);
@@ -210,7 +224,7 @@ export default function DedupePage() {
     finally { setLoading(false); }
   }, [status, minScore, search]);
 
-  useEffect(() => { loadStats(); }, []);
+  useEffect(() => { loadStats(); }, [loadStats]);
   useEffect(() => { loadItems(); }, [loadItems]);
 
   async function handleMerge(suggestion, pick) {

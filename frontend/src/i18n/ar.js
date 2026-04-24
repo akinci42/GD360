@@ -158,6 +158,8 @@ export default {
         keyboardHint: 'المفاتيح: A = اختر A رئيسيًا · B = اختر B · Space = دمج · X = إبقاء منفصل',
         confirmMerge: 'سيتم حذف السجل {{other}} ونقله تحت {{master}}. هل أنت متأكد؟',
         confirmMergeTitle: 'تأكيد الدمج',
+        mergedAway: 'تم الدمج مع',
+        deletedAfterMerge: 'تم حذف هذا العميل أثناء الدمج',
         toast: { merged: 'تم الدمج', rejected: 'تم الرفض' },
       },
     },

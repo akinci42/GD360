@@ -42,7 +42,7 @@ router.get('/suggestions', requireRole('owner', 'coordinator'), async (req, res,
       SELECT
         s.id, s.similarity_score, s.match_reason, s.status,
         s.created_at, s.reviewed_at, s.review_notes, s.merged_into_id,
-        jsonb_build_object(
+        CASE WHEN a.id IS NULL THEN NULL::jsonb ELSE jsonb_build_object(
           'id', a.id, 'company_name', a.company_name, 'country', a.country,
           'city', a.city, 'status', a.status, 'assigned_to_name', ua.full_name,
           'quote_count',
@@ -52,8 +52,8 @@ router.get('/suggestions', requireRole('owner', 'coordinator'), async (req, res,
             (SELECT MAX(tarih)            FROM historical_quotes_raw WHERE customer_id = a.id),
             (SELECT MAX(created_at)::date FROM offers                WHERE customer_id = a.id)
           )
-        ) AS customer_a,
-        jsonb_build_object(
+        ) END AS customer_a,
+        CASE WHEN b.id IS NULL THEN NULL::jsonb ELSE jsonb_build_object(
           'id', b.id, 'company_name', b.company_name, 'country', b.country,
           'city', b.city, 'status', b.status, 'assigned_to_name', ub.full_name,
           'quote_count',
@@ -63,7 +63,7 @@ router.get('/suggestions', requireRole('owner', 'coordinator'), async (req, res,
             (SELECT MAX(tarih)            FROM historical_quotes_raw WHERE customer_id = b.id),
             (SELECT MAX(created_at)::date FROM offers                WHERE customer_id = b.id)
           )
-        ) AS customer_b
+        ) END AS customer_b
       FROM dedupe_suggestions s
       LEFT JOIN customers a  ON a.id  = s.customer_a_id
       LEFT JOIN customers b  ON b.id  = s.customer_b_id
@@ -92,19 +92,39 @@ router.get('/suggestions', requireRole('owner', 'coordinator'), async (req, res,
 });
 
 // ─── GET /api/v1/dedupe/stats ────────────────────────────────────────────────
+// Honors min_score + search filters so the cards on top of the page track
+// what the user is currently narrowing the list down to. Status tabs are
+// independent — each card reports its own status count.
 router.get('/stats', requireRole('owner', 'coordinator'), async (req, res, next) => {
   const client = await getRlsClient(req.user);
   try {
+    const { min_score, search } = req.query;
+    const params = [];
+    const conds  = [];
+    if (min_score) {
+      const n = parseFloat(min_score);
+      if (!Number.isNaN(n)) { params.push(n); conds.push(`s.similarity_score >= $${params.length}`); }
+    }
+    if (search) {
+      params.push(`%${search}%`);
+      const n = params.length;
+      conds.push(`(a.company_name ILIKE $${n} OR b.company_name ILIKE $${n})`);
+    }
+    const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
+
     const { rows } = await client.query(`
       SELECT
-        COUNT(*) FILTER (WHERE status = 'pending')  AS pending,
-        COUNT(*) FILTER (WHERE status = 'merged')   AS merged,
-        COUNT(*) FILTER (WHERE status = 'rejected') AS rejected,
-        COUNT(*)                                    AS total,
-        ROUND(AVG(similarity_score)::numeric, 3)    AS avg_score,
-        MAX(similarity_score)                       AS top_score
-      FROM dedupe_suggestions
-    `);
+        COUNT(*) FILTER (WHERE s.status = 'pending')  AS pending,
+        COUNT(*) FILTER (WHERE s.status = 'merged')   AS merged,
+        COUNT(*) FILTER (WHERE s.status = 'rejected') AS rejected,
+        COUNT(*)                                      AS total,
+        ROUND(AVG(s.similarity_score)::numeric, 3)    AS avg_score,
+        MAX(s.similarity_score)                       AS top_score
+      FROM dedupe_suggestions s
+      LEFT JOIN customers a ON a.id = s.customer_a_id
+      LEFT JOIN customers b ON b.id = s.customer_b_id
+      ${where}
+    `, params);
     res.json({ success: true, data: rows[0] });
   } catch (err) { next(err); } finally { client.release(); }
 });
