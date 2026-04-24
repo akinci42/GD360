@@ -6,3 +6,7 @@ backups/
 *.sql
 !backend/migrations/*.sql
 !backend/seeds/*.sql
+
+# Python cache
+__pycache__/
+*.pyc
