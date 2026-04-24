@@ -128,3 +128,13 @@ docker-compose logs -f backend
 # Frontend dev (local)
 cd frontend && npm run dev
 ```
+
+Yeni paket eklendiğinde (package.json değişikliği):
+
+```powershell
+.\scripts\dev-install.ps1 backend
+# veya
+.\scripts\dev-install.ps1 frontend
+```
+
+Bind-mount aktif olduğu için kod değişikliği rebuild istemez; ancak `/app/node_modules` anonymous volume image-time snapshot'ı tuttuğundan, yeni bağımlılık eklendiğinde container içinde `npm install` çalıştırmak gerekir.
