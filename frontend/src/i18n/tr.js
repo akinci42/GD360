@@ -131,6 +131,9 @@ export default {
       openDetail: 'Detay Sayfasına Git',
       rowActions: 'İşlemler',
       confirmDelete: 'Bu müşteriyi silmek istediğinize emin misiniz?',
+      lastQuote: 'Son Teklif',
+      quotes: 'Teklifler',
+      freshness: { new: 'yeni', old: 'eski', stale: 'atıl' },
     },
     dashboard: {
       welcome: 'Hoş geldiniz',

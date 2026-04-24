@@ -131,6 +131,9 @@ export default {
       openDetail: 'Открыть страницу деталей',
       rowActions: 'Действия',
       confirmDelete: 'Вы уверены, что хотите удалить этого клиента?',
+      lastQuote: 'Последнее предложение',
+      quotes: 'Предложения',
+      freshness: { new: 'новый', old: 'старый', stale: 'устаревший' },
     },
     dashboard: {
       welcome: 'Добро пожаловать',

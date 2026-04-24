@@ -26,20 +26,26 @@ function validateCustomerType(body) {
   return null;
 }
 
-// Sort whitelist — invalid values silently fall back to default (last_activity_desc)
+// Sort whitelist — invalid values silently fall back to default (last_quote_desc).
+// Quote-related keys depend on alias columns produced in the SELECT list
+// (last_quote_date, first_quote_date, total_quote_count).
 const SORT_WHITELIST = {
-  company_name_asc:   'c.company_name COLLATE "tr-TR-x-icu" ASC',
-  company_name_desc:  'c.company_name COLLATE "tr-TR-x-icu" DESC',
-  country_asc:        'c.country ASC NULLS LAST',
-  country_desc:       'c.country DESC NULLS LAST',
-  last_activity_desc: '(SELECT MAX(created_at) FROM opportunities WHERE customer_id = c.id) DESC NULLS LAST',
-  last_activity_asc:  '(SELECT MAX(created_at) FROM opportunities WHERE customer_id = c.id) ASC  NULLS LAST',
-  created_at_desc:    'c.created_at DESC',
-  created_at_asc:     'c.created_at ASC',
-  quote_count_desc:   '(SELECT COUNT(*) FROM historical_quotes_raw WHERE customer_id = c.id) DESC',
-  quote_count_asc:    '(SELECT COUNT(*) FROM historical_quotes_raw WHERE customer_id = c.id) ASC',
+  company_name_asc:  'c.company_name COLLATE "tr-TR-x-icu" ASC',
+  company_name_desc: 'c.company_name COLLATE "tr-TR-x-icu" DESC',
+  country_asc:       'c.country ASC NULLS LAST',
+  country_desc:      'c.country DESC NULLS LAST',
+  assigned_to_asc:   'u.full_name COLLATE "tr-TR-x-icu" ASC NULLS LAST',
+  assigned_to_desc:  'u.full_name COLLATE "tr-TR-x-icu" DESC NULLS LAST',
+  last_quote_desc:   'last_quote_date DESC NULLS LAST',
+  last_quote_asc:    'last_quote_date ASC  NULLS LAST',
+  first_quote_desc:  'first_quote_date DESC NULLS LAST',
+  first_quote_asc:   'first_quote_date ASC  NULLS LAST',
+  created_at_desc:   'c.created_at DESC',
+  created_at_asc:    'c.created_at ASC',
+  quote_count_desc:  'total_quote_count DESC',
+  quote_count_asc:   'total_quote_count ASC',
 };
-const DEFAULT_SORT = 'last_activity_desc';
+const DEFAULT_SORT = 'last_quote_desc';
 
 // ─── GET /api/v1/customers ────────────────────────────────────────────────────
 router.get('/', async (req, res, next) => {
@@ -95,9 +101,20 @@ router.get('/', async (req, res, next) => {
         (SELECT COUNT(*)     FROM customer_contacts cc  WHERE cc.customer_id = c.id)                                              AS contacts_count,
         (SELECT cc.full_name FROM customer_contacts cc  WHERE cc.customer_id = c.id AND cc.is_primary ORDER BY cc.created_at LIMIT 1) AS primary_contact_name,
         (SELECT cc.phone     FROM customer_contacts cc  WHERE cc.customer_id = c.id AND cc.is_primary ORDER BY cc.created_at LIMIT 1) AS primary_contact_phone,
-        (SELECT COUNT(*)     FROM customers             WHERE parent_id = c.id)                                                   AS children_count,
-        (SELECT COUNT(*)     FROM historical_quotes_raw WHERE customer_id = c.id)                                                 AS historical_quote_count,
-        (SELECT MAX(f.scheduled_at) FROM followups f    WHERE f.customer_id = c.id)                                               AS last_activity_at
+        (SELECT COUNT(*) FROM customers             WHERE parent_id   = c.id) AS children_count,
+        (SELECT COUNT(*) FROM historical_quotes_raw WHERE customer_id = c.id) AS historical_quote_count,
+        GREATEST(
+          (SELECT MAX(tarih)            FROM historical_quotes_raw WHERE customer_id = c.id),
+          (SELECT MAX(created_at)::date FROM offers                WHERE customer_id = c.id)
+        ) AS last_quote_date,
+        LEAST(
+          (SELECT MIN(tarih)            FROM historical_quotes_raw WHERE customer_id = c.id),
+          (SELECT MIN(created_at)::date FROM offers                WHERE customer_id = c.id)
+        ) AS first_quote_date,
+        (
+          (SELECT COUNT(*) FROM historical_quotes_raw WHERE customer_id = c.id) +
+          (SELECT COUNT(*) FROM offers                WHERE customer_id = c.id)
+        ) AS total_quote_count
       FROM customers c
       LEFT JOIN users     u ON u.id = c.assigned_to
       LEFT JOIN customers p ON p.id = c.parent_id

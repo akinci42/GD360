@@ -131,6 +131,9 @@ export default {
       openDetail: 'Open Detail Page',
       rowActions: 'Actions',
       confirmDelete: 'Are you sure you want to delete this customer?',
+      lastQuote: 'Last Quote',
+      quotes: 'Quotes',
+      freshness: { new: 'new', old: 'old', stale: 'stale' },
     },
     dashboard: {
       welcome: 'Welcome',

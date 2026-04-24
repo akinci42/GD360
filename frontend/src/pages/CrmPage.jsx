@@ -5,8 +5,34 @@ import { useAuthStore } from '../store/authStore.js';
 import QuickEditCustomerModal from '../components/QuickEditCustomerModal.jsx';
 import api from '../utils/api.js';
 
-const DEFAULT_SORT = 'last_activity_desc';
-const DEFAULT_SORT_DIR = { company_name: 'asc', country: 'asc', last_activity: 'desc' };
+const DEFAULT_SORT = 'last_quote_desc';
+const DEFAULT_SORT_DIR = {
+  company_name: 'asc',
+  country:      'asc',
+  assigned_to:  'asc',
+  last_quote:   'desc',
+  quote_count:  'desc',
+};
+
+// Freshness thresholds in days for the "Son Teklif" badge
+const FRESH_DAYS = 30;   // ≤ 30 days  → new (green)
+const OLD_DAYS   = 180;  // > 180 days → old (amber)
+const STALE_DAYS = 365;  // > 365 days → stale (red)
+
+function freshnessFor(dateStr) {
+  if (!dateStr) return null;
+  const diffDays = (Date.now() - new Date(dateStr).getTime()) / 86400000;
+  if (diffDays <= FRESH_DAYS) return 'new';
+  if (diffDays >  STALE_DAYS) return 'stale';
+  if (diffDays >  OLD_DAYS)   return 'old';
+  return null;
+}
+
+const FRESHNESS_COLORS = {
+  new:   'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30',
+  old:   'bg-amber-500/20 text-amber-300 border border-amber-500/30',
+  stale: 'bg-red-500/20 text-red-300 border border-red-500/30',
+};
 
 function SortableHeader({ col, label, sort, onToggle }) {
   const active = sort.startsWith(col + '_');
@@ -577,16 +603,26 @@ export default function CrmPage() {
 
       {/* Table */}
       <div className="card p-0 overflow-hidden overflow-x-auto">
-        <table className="w-full text-sm min-w-[960px]">
+        <table className="w-full text-sm min-w-[1000px] table-fixed">
+          <colgroup>
+            <col style={{ width: '25%' }} />
+            <col style={{ width: '15%' }} />
+            <col style={{ width: '10%' }} />
+            <col style={{ width: '10%' }} />
+            <col style={{ width: '15%' }} />
+            <col style={{ width: '12%' }} />
+            <col style={{ width: '8%'  }} />
+            <col style={{ width: '5%'  }} />
+          </colgroup>
           <thead>
             <tr className="border-b border-dark-700">
-              <SortableHeader col="company_name"  label="Firma"                   sort={sort} onToggle={toggleSort} />
-              <SortableHeader col="country"       label={t('crm.location')}       sort={sort} onToggle={toggleSort} />
+              <SortableHeader col="company_name" label="Firma"                 sort={sort} onToggle={toggleSort} />
+              <SortableHeader col="country"      label={t('crm.location')}     sort={sort} onToggle={toggleSort} />
               <th className="text-left px-4 py-3 text-slate-400 font-medium">{t('crm.customerType')}</th>
               <th className="text-left px-4 py-3 text-slate-400 font-medium">{t('crm.status')}</th>
-              <th className="text-left px-4 py-3 text-slate-400 font-medium">Yetkili Kişi</th>
-              <th className="text-left px-4 py-3 text-slate-400 font-medium">{t('crm.assignedTo')}</th>
-              <SortableHeader col="last_activity" label={t('crm.lastActivity')}   sort={sort} onToggle={toggleSort} />
+              <SortableHeader col="assigned_to"  label={t('crm.assignedTo')}   sort={sort} onToggle={toggleSort} />
+              <SortableHeader col="last_quote"   label={t('crm.lastQuote')}    sort={sort} onToggle={toggleSort} />
+              <SortableHeader col="quote_count"  label={t('crm.quotes')}       sort={sort} onToggle={toggleSort} />
               <th className="w-10 px-2"></th>
             </tr>
           </thead>
@@ -621,25 +657,30 @@ export default function CrmPage() {
                 <td className="px-4 py-3">
                   <StatusBadge status={c.status} t={t} />
                 </td>
-                <td className="px-4 py-3">
-                  {c.primary_contact_name ? (
-                    <div>
-                      <p className="text-slate-200 text-sm">{c.primary_contact_name}</p>
-                      {c.primary_contact_phone && (
-                        <p className="text-xs text-slate-500 font-mono mt-0.5">{c.primary_contact_phone}</p>
-                      )}
+                <td className="px-4 py-3 text-slate-400 text-sm truncate">{c.assigned_to_name || '—'}</td>
+                <td className="px-4 py-3 text-xs">
+                  {c.last_quote_date ? (
+                    <div className="flex items-center gap-2">
+                      <span className="text-slate-400">{fmtDate(c.last_quote_date)}</span>
+                      {(() => {
+                        const f = freshnessFor(c.last_quote_date);
+                        return f ? (
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${FRESHNESS_COLORS[f]}`}>
+                            {t(`crm.freshness.${f}`)}
+                          </span>
+                        ) : null;
+                      })()}
                     </div>
                   ) : (
-                    <span className="text-slate-600 text-xs italic">
-                      {parseInt(c.contacts_count) > 0 ? `${c.contacts_count} kişi` : '—'}
-                    </span>
+                    <span className="text-slate-600">—</span>
                   )}
                 </td>
-                <td className="px-4 py-3 text-slate-400 text-sm">{c.assigned_to_name || '—'}</td>
-                <td className="px-4 py-3 text-xs text-slate-500">
-                  {c.last_activity_at
-                    ? fmtDate(c.last_activity_at)
-                    : <span className="italic text-slate-600">{t('crm.noActivity')}</span>}
+                <td className="px-4 py-3 text-right">
+                  {parseInt(c.total_quote_count) > 0 ? (
+                    <span className="text-emerald-300 font-mono font-medium text-sm">{c.total_quote_count}</span>
+                  ) : (
+                    <span className="text-slate-600 font-mono text-sm">0</span>
+                  )}
                 </td>
                 <td className="px-2 py-3 text-right" onClick={e => e.stopPropagation()}>
                   <RowActionsMenu

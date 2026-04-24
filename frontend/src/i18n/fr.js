@@ -131,6 +131,9 @@ export default {
       openDetail: 'Ouvrir la page de détails',
       rowActions: 'Actions',
       confirmDelete: 'Êtes-vous sûr de vouloir supprimer ce client ?',
+      lastQuote: 'Dernier devis',
+      quotes: 'Devis',
+      freshness: { new: 'nouveau', old: 'ancien', stale: 'obsolète' },
     },
     dashboard: {
       welcome: 'Bienvenue',

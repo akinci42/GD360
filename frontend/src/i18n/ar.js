@@ -131,6 +131,9 @@ export default {
       openDetail: 'فتح صفحة التفاصيل',
       rowActions: 'إجراءات',
       confirmDelete: 'هل أنت متأكد من حذف هذا العميل؟',
+      lastQuote: 'آخر عرض',
+      quotes: 'العروض',
+      freshness: { new: 'جديد', old: 'قديم', stale: 'راكد' },
     },
     dashboard: {
       welcome: 'مرحباً',
