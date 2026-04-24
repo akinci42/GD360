@@ -192,10 +192,9 @@ router.post('/suggestions/:id/merge', requireRole('owner', 'coordinator'), async
       ]
     );
 
-    // Delete the 'other' customer
-    await client.query(`DELETE FROM customers WHERE id = $1`, [otherId]);
-
-    // Mark suggestion merged
+    // Mark suggestion merged BEFORE deleting the customer.
+    // FK is ON DELETE SET NULL (migration 015) so the row survives either way,
+    // but updating first keeps the lifecycle readable in logs.
     await client.query(
       `UPDATE dedupe_suggestions
        SET status = 'merged', merged_into_id = $1, reviewed_by = $2,
@@ -203,6 +202,9 @@ router.post('/suggestions/:id/merge', requireRole('owner', 'coordinator'), async
        WHERE id = $4`,
       [masterId, req.user.id, review_notes || null, suggestion.id]
     );
+
+    // Delete the 'other' customer
+    await client.query(`DELETE FROM customers WHERE id = $1`, [otherId]);
 
     await client.query('COMMIT');
 
