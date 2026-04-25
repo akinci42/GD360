@@ -182,17 +182,27 @@ function LinkModal({ item, onCancel, onConfirm, busy, t }) {
 }
 
 // ─── Single suggestion card ───────────────────────────────────────────────────
-function SuggestionCard({ item, isFocused, onFocus, onApprove, onLink, onReject, onUndo, t }) {
+function SuggestionCard({ item, isFocused, selected, selectable, onFocus, onToggleSelect, onApprove, onLink, onReject, onUndo, t }) {
   const partner = item.partner;
   const reviewed = item.reviewed;
 
   return (
     <div
       onClick={onFocus}
-      className={`card transition-all cursor-pointer ${isFocused ? 'ring-2 ring-brand-500/60' : ''}`}
+      className={`card transition-all cursor-pointer ${isFocused ? 'ring-2 ring-brand-500/60' : ''} ${selected ? 'ring-2 ring-amber-500/60 bg-amber-500/[0.03]' : ''}`}
     >
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-3">
+          {selectable && (
+            <input
+              type="checkbox"
+              checked={!!selected}
+              onClick={e => e.stopPropagation()}
+              onChange={onToggleSelect}
+              className="w-4 h-4 accent-amber-500 cursor-pointer"
+              title={t('endCustomerReview.selectThis')}
+            />
+          )}
           <span className="text-xs text-slate-500 font-mono">{item.ref_no || '—'}</span>
           <span className="text-xs text-slate-600">·</span>
           <span className="text-xs text-slate-500">
@@ -272,6 +282,56 @@ function SuggestionCard({ item, isFocused, onFocus, onApprove, onLink, onReject,
   );
 }
 
+// ─── Bulk reject modal ────────────────────────────────────────────────────────
+function BulkRejectModal({ count, onCancel, onConfirm, busy, t }) {
+  const [notes, setNotes] = useState('');
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm px-4">
+      <div className="bg-dark-800 border border-dark-600 rounded-xl shadow-2xl w-[460px] max-w-full p-5">
+        <h3 className="text-sm font-semibold text-slate-100 mb-2">
+          {t('endCustomerReview.bulkRejectTitle', { count })}
+        </h3>
+        <p className="text-xs text-slate-400 mb-3">{t('endCustomerReview.bulkRejectWarning')}</p>
+        <label className="text-xs text-slate-400 block mb-1">{t('endCustomerReview.bulkRejectReason')}</label>
+        <textarea
+          autoFocus
+          rows={3}
+          className="input w-full"
+          value={notes}
+          onChange={e => setNotes(e.target.value)}
+          placeholder={t('endCustomerReview.rejectPlaceholder')}
+        />
+        <div className="flex gap-3 mt-4">
+          <button onClick={() => onConfirm(notes.trim() || null)} disabled={busy}
+            className="btn-primary bg-red-600 hover:bg-red-500 flex-1 text-sm">
+            {busy ? t('common.loading') : t('endCustomerReview.bulkReject')}
+          </button>
+          <button onClick={onCancel} className="btn-secondary flex-1 text-sm">{t('common.cancel')}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Floating selection bar (sticky bottom) ──────────────────────────────────
+function SelectionBar({ count, onBulkReject, onClear, t }) {
+  return (
+    <div className="fixed bottom-0 left-60 right-0 z-40 bg-dark-800/95 backdrop-blur border-t border-amber-500/40 px-6 py-3 flex items-center gap-4 shadow-[0_-4px_12px_rgba(0,0,0,0.4)]">
+      <span className="text-sm text-slate-100 font-medium">
+        {t('endCustomerReview.selectedCount', { count })}
+      </span>
+      <span className="flex-1" />
+      <button onClick={onBulkReject}
+        className="btn-primary bg-red-600 hover:bg-red-500 text-sm px-4 py-1.5">
+        ✕ {t('endCustomerReview.bulkReject')}
+      </button>
+      <button onClick={onClear} className="btn-secondary text-sm px-4 py-1.5">
+        {t('endCustomerReview.clearSelection')}
+      </button>
+    </div>
+  );
+}
+
 // ─── Toast ────────────────────────────────────────────────────────────────────
 function Toast({ msg, onDone }) {
   useEffect(() => { const id = setTimeout(onDone, 2500); return () => clearTimeout(id); }, [onDone]);
@@ -301,9 +361,10 @@ export default function EndCustomerReviewPage() {
   const [partnerDropdownOpen, setPartnerDropdownOpen] = useState(false);
 
   const [focusedIdx, setFocusedIdx]   = useState(0);
-  const [pendingAction, setPendingAction] = useState(null); // {kind:'approve'|'reject'|'link', item}
+  const [pendingAction, setPendingAction] = useState(null); // {kind:'approve'|'reject'|'link'|'bulk-reject', item?}
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState('');
+  const [selected, setSelected] = useState(() => new Set()); // hqr_id set
 
   const cardRefs = useRef([]);
 
@@ -406,21 +467,111 @@ export default function EndCustomerReviewPage() {
     }
   }
 
+  // ─── Selection helpers ──────────────────────────────────────────────────────
+  const selectablePending = items.filter(i => !i.reviewed);
+  const allOnPageSelected =
+    selectablePending.length > 0 && selectablePending.every(i => selected.has(i.id));
+
+  function toggleOne(id) {
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+  function selectAllOnPage() {
+    setSelected(prev => {
+      const next = new Set(prev);
+      selectablePending.forEach(i => next.add(i.id));
+      return next;
+    });
+  }
+  function clearSelection() {
+    setSelected(new Set());
+  }
+  function toggleAllOnPage() {
+    if (allOnPageSelected) clearSelection(); else selectAllOnPage();
+  }
+
+  // Drop selection entries that are no longer visible (filter/page change drops their hqr_ids).
+  // We only keep ids that match the current items list so the counter stays meaningful.
+  useEffect(() => {
+    setSelected(prev => {
+      if (prev.size === 0) return prev;
+      const visible = new Set(items.map(i => i.id));
+      const next = new Set();
+      let changed = false;
+      prev.forEach(id => { if (visible.has(id)) next.add(id); else changed = true; });
+      return changed ? next : prev;
+    });
+  }, [items]);
+
+  async function handleBulkReject(notes) {
+    setBusy(true);
+    try {
+      const r = await api.post('/end-customer/suggestions/bulk-reject', {
+        hqr_ids: Array.from(selected),
+        notes: notes || null,
+      });
+      const { rejected, skipped } = r.data.data;
+      setToast(t('endCustomerReview.toast.bulkRejected', { rejected, skipped }));
+      setPendingAction(null);
+      clearSelection();
+      loadStats();
+      loadItems();
+    } catch (err) {
+      setToast(err.response?.data?.error || t('common.error'));
+    }
+    finally { setBusy(false); }
+  }
+
   // Keyboard shortcuts
   useEffect(() => {
     function handler(e) {
       if (pendingAction) return;
       const tag = e.target.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+
+      const k = e.key.toLowerCase();
+      const inSelectionMode = selected.size > 0;
+
+      // Page-wide shortcuts (work regardless of focused card)
+      if ((e.ctrlKey || e.metaKey) && k === 'a' && status === 'pending') {
+        e.preventDefault();
+        selectAllOnPage();
+        return;
+      }
+      if (e.key === 'Escape') {
+        if (inSelectionMode) { clearSelection(); return; }
+        setPendingAction(null);
+        return;
+      }
+
       const item = items[focusedIdx];
       if (!item) return;
 
-      const k = e.key.toLowerCase();
+      // Reviewed cards: only navigation
       if (item.reviewed) {
         if (e.key === 'ArrowDown' || k === 'j') setFocusedIdx(i => Math.min(i + 1, items.length - 1));
         else if (e.key === 'ArrowUp' || k === 'k') setFocusedIdx(i => Math.max(i - 1, 0));
         return;
       }
+
+      // Space: toggle selection on focused card and advance
+      if (e.key === ' ') {
+        e.preventDefault();
+        toggleOne(item.id);
+        setFocusedIdx(i => Math.min(i + 1, items.length - 1));
+        return;
+      }
+
+      // Single-card shortcuts disabled while a selection is active
+      if (inSelectionMode) {
+        if (e.key === 'ArrowDown' || k === 'j') setFocusedIdx(i => Math.min(i + 1, items.length - 1));
+        else if (e.key === 'ArrowUp' || k === 'k') setFocusedIdx(i => Math.max(i - 1, 0));
+        return;
+      }
+
       if (k === 'o' || k === 'y') {
         e.preventDefault();
         setPendingAction({ kind: 'approve', item });
@@ -432,18 +583,17 @@ export default function EndCustomerReviewPage() {
         setPendingAction({ kind: 'reject', item });
       } else if (k === 'e') {
         e.preventDefault();
-        setPendingAction({ kind: 'approve', item });  // same modal — user edits company_name
+        setPendingAction({ kind: 'approve', item });  // edit-and-approve (same modal)
       } else if (e.key === 'ArrowDown' || k === 'j') {
         setFocusedIdx(i => Math.min(i + 1, items.length - 1));
       } else if (e.key === 'ArrowUp' || k === 'k') {
         setFocusedIdx(i => Math.max(i - 1, 0));
-      } else if (e.key === 'Escape') {
-        setPendingAction(null);
       }
     }
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [items, focusedIdx, pendingAction]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items, focusedIdx, pendingAction, selected, status]);
 
   useEffect(() => {
     cardRefs.current[focusedIdx]?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
@@ -458,9 +608,27 @@ export default function EndCustomerReviewPage() {
 
   return (
     <div className="p-6">
-      <div className="mb-4">
-        <h1 className="text-2xl font-bold text-slate-100">{t('endCustomerReview.title')}</h1>
-        <p className="text-slate-400 text-sm mt-0.5">{t('endCustomerReview.subtitle')}</p>
+      <div className="mb-4 flex items-end justify-between gap-3 flex-wrap">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-100">{t('endCustomerReview.title')}</h1>
+          <p className="text-slate-400 text-sm mt-0.5">{t('endCustomerReview.subtitle')}</p>
+        </div>
+        {status === 'pending' && selectablePending.length > 0 && (
+          <label className="text-xs text-slate-300 flex items-center gap-2 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={allOnPageSelected}
+              onChange={toggleAllOnPage}
+              className="w-4 h-4 accent-amber-500"
+            />
+            {allOnPageSelected ? t('endCustomerReview.deselectAll') : t('endCustomerReview.selectAll')}
+            {selected.size > 0 && (
+              <span className="text-amber-400 ml-1">
+                ({t('endCustomerReview.selectedCount', { count: selected.size })})
+              </span>
+            )}
+          </label>
+        )}
       </div>
 
       <StatsRow stats={stats} t={t} />
@@ -535,7 +703,9 @@ export default function EndCustomerReviewPage() {
         <span className="text-xs text-slate-500">{total}</span>
       </div>
 
-      <p className="text-xs text-slate-500 mb-3 italic">{t('endCustomerReview.keyboardHint')}</p>
+      <p className="text-xs text-slate-500 mb-3 italic">
+        {selected.size > 0 ? t('endCustomerReview.keyboardHintSelection') : t('endCustomerReview.keyboardHint')}
+      </p>
 
       {loading && <p className="text-slate-500 text-sm">{t('common.loading')}</p>}
       {!loading && items.length === 0 && (
@@ -547,7 +717,10 @@ export default function EndCustomerReviewPage() {
             <SuggestionCard
               item={s}
               isFocused={i === focusedIdx}
+              selected={selected.has(s.id)}
+              selectable={!s.reviewed}
               onFocus={() => setFocusedIdx(i)}
+              onToggleSelect={() => toggleOne(s.id)}
               onApprove={() => setPendingAction({ kind: 'approve', item: s })}
               onLink={()    => setPendingAction({ kind: 'link',    item: s })}
               onReject={()  => setPendingAction({ kind: 'reject',  item: s })}
@@ -596,6 +769,15 @@ export default function EndCustomerReviewPage() {
           t={t}
         />
       )}
+      {pendingAction?.kind === 'bulk-reject' && (
+        <BulkRejectModal
+          count={selected.size}
+          busy={busy}
+          onCancel={() => setPendingAction(null)}
+          onConfirm={notes => handleBulkReject(notes)}
+          t={t}
+        />
+      )}
       {pendingAction?.kind === 'link' && (
         <LinkModal
           item={pendingAction.item}
@@ -607,6 +789,17 @@ export default function EndCustomerReviewPage() {
       )}
 
       {toast && <Toast msg={toast} onDone={() => setToast('')} />}
+
+      {selected.size > 0 && (
+        <SelectionBar
+          count={selected.size}
+          onBulkReject={() => setPendingAction({ kind: 'bulk-reject' })}
+          onClear={clearSelection}
+          t={t}
+        />
+      )}
+      {/* Padding so the floating bar doesn't cover the last card */}
+      {selected.size > 0 && <div className="h-16" />}
     </div>
   );
 }
