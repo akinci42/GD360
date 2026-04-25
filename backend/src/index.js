@@ -19,6 +19,7 @@ import notificationsRouter from './routes/notifications.js';
 import costsRouter from './routes/costs.js';
 import ustaBotRouter from './routes/ustabot.js';
 import dedupeRouter from './routes/dedupe.js';
+import endCustomerReviewRouter from './routes/end_customer_review.js';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -46,6 +47,7 @@ app.use('/api/v1/notifications', notificationsRouter);
 app.use('/api/v1/costs', costsRouter);
 app.use('/api/v1/ustabot', ustaBotRouter);
 app.use('/api/v1/dedupe', dedupeRouter);
+app.use('/api/v1/end-customer', endCustomerReviewRouter);
 
 app.use((err, req, res, next) => {
   console.error(err);
