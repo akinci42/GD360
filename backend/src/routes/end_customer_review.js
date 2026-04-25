@@ -284,6 +284,76 @@ router.post('/suggestions/:hqr_id/reject', requireRole('owner', 'coordinator'), 
   } finally { client.release(); }
 });
 
+// ─── POST /api/v1/end-customer/suggestions/bulk-reject ──────────────────────
+// Reject many suggestions in one transaction. Already-reviewed rows are
+// skipped (no error). Each successful rejection emits its own audit_log
+// row so undo can still operate per-suggestion from the reviewed tab.
+router.post('/suggestions/bulk-reject', requireRole('owner', 'coordinator'), async (req, res, next) => {
+  const client = await getRlsClient(req.user);
+  try {
+    const { hqr_ids, notes } = req.body;
+    if (!Array.isArray(hqr_ids) || hqr_ids.length === 0) {
+      return res.status(400).json({ success: false, error: 'hqr_ids must be a non-empty array' });
+    }
+    if (hqr_ids.length > 200) {
+      return res.status(400).json({ success: false, error: 'hqr_ids exceeds max of 200 per request' });
+    }
+    const cleanNotes = (notes && String(notes).trim()) || 'Bulk reject';
+
+    await client.query('BEGIN');
+
+    const { rows: updated } = await client.query(
+      `UPDATE historical_quotes_raw
+       SET end_customer_reviewed = true,
+           end_customer_review_notes = $1
+       WHERE id = ANY($2::uuid[])
+         AND end_customer_reviewed = false
+       RETURNING id, end_customer_suggestion, customer_id`,
+      [cleanNotes, hqr_ids]
+    );
+
+    if (updated.length > 0) {
+      const auditValues = [];
+      const auditParams = [];
+      updated.forEach((row, i) => {
+        const base = i * 6;
+        auditParams.push(
+          req.user.id, req.user.email,
+          'bulk_reject_end_customer_suggestion',
+          'historical_quotes_raw', row.id,
+          JSON.stringify({
+            suggestion_text: row.end_customer_suggestion,
+            partner_id: row.customer_id,
+            notes: cleanNotes,
+            batch_size: updated.length,
+          }),
+        );
+        auditValues.push(`($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6})`);
+      });
+      await client.query(
+        `INSERT INTO audit_log (user_id, user_email, action, entity_type, entity_id, new_values)
+         VALUES ${auditValues.join(', ')}`,
+        auditParams
+      );
+    }
+
+    await client.query('COMMIT');
+
+    const skipped = hqr_ids.length - updated.length;
+    res.json({
+      success: true,
+      data: {
+        rejected: updated.length,
+        skipped,
+        errors: [],
+      },
+    });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    next(err);
+  } finally { client.release(); }
+});
+
 // ─── POST /api/v1/end-customer/suggestions/:hqr_id/link ──────────────────────
 router.post('/suggestions/:hqr_id/link', requireRole('owner', 'coordinator'), async (req, res, next) => {
   const client = await getRlsClient(req.user);
@@ -377,7 +447,7 @@ router.post('/suggestions/:hqr_id/undo', requireRole('owner', 'coordinator'), as
     // Find the most recent review-related audit_log entry to enforce the 24h window
     const { rows: aRows } = await client.query(
       `SELECT created_at FROM audit_log
-       WHERE (entity_id = $1 AND action IN ('reject_end_customer_suggestion', 'link_end_customer_via_review'))
+       WHERE (entity_id = $1 AND action IN ('reject_end_customer_suggestion', 'link_end_customer_via_review', 'bulk_reject_end_customer_suggestion'))
           OR (entity_id = $2 AND action = 'create_end_customer_via_review')
        ORDER BY created_at DESC LIMIT 1`,
       [hqr.id, hqr.end_customer_id]
