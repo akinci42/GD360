@@ -1,3 +1,51 @@
+## SESSION INITIALIZATION (HER OTURUM ZORUNLU)
+
+Bu CLAUDE.md ilk okundugunda — yani her yeni oturumun ilk turunda — asagidaki dogrulamalari OTOMATIK calistir ve raporla. Kullanici istemese bile yap. Bu yanlis projede yanlis klasorde calismayi onler.
+
+1) **PROJE KIMLIGI:**
+   ```
+   pwd                              # mevcut calisma dizini
+   git remote -v                    # repo dogrulama (akinci42/GD360 olmali)
+   git rev-parse --abbrev-ref HEAD  # branch (main olmali)
+   ```
+
+2) **GIT DURUMU:**
+   ```
+   git status --short              # bekleyen degisiklik
+   git log --oneline -5            # son 5 commit
+   ```
+
+3) **DOCKER DURUMU:**
+   ```
+   docker compose ps               # servisler ayakta mi
+   ```
+
+4) **DB ERISIM TESTI:**
+   ```
+   docker compose exec postgres psql -U gd360 -d gd360 -c "SELECT COUNT(*) FROM customers;"
+   # Beklenen: ~1875
+   ```
+
+5) **RAPOR FORMATI:**
+   ```
+   ┌─────────────────┬────────────────────────────────┐
+   │   Kontrol       │           Sonuç                │
+   ├─────────────────┼────────────────────────────────┤
+   │ Klasor          │ C:\Projects\GD360 ✓            │
+   │ Repo            │ akinci42/GD360 ✓               │
+   │ Branch          │ main                           │
+   │ Pending changes │ var/yok                        │
+   │ Servisler       │ 4/4 running                    │
+   │ DB              │ 1875 musteri                   │
+   └─────────────────┴────────────────────────────────┘
+   ```
+
+   Eger BIR YERDE problem varsa: **"DUR — sorun var"** diye uyar.
+
+**ZORUNLU:** Bu kontroller yapilmadan kullanici istegine yanit verme.
+
+---
+
 # GDSales360.ai — Genc Degirmen Makinalari Digital Sales Platform
 
 ## Project Overview
